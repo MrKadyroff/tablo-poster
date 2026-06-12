@@ -1,0 +1,60 @@
+{
+    "pointId": "eurasia",
+    "canvas": {
+        // TODO: set actual screen dimensions when known
+        "width": 560,
+        "height": 80
+    },
+    "gridLayout": {
+        "oversample": 4,
+        "flagsDir": "../flags",
+        "logoFile": "logo.png",
+        "left": [
+            "USD",
+            "EUR",
+            "RUB",
+            "CNY"
+        ],
+        "right": [
+            "GBP",
+            "CHF",
+            "AED",
+            "TRY"
+        ],
+        "flagFiles": {
+            "USD": "usd.png",
+            "EUR": "eur.png",
+            "RUB": "rub.png",
+            "CNY": "cny.png",
+            "GBP": "gbp.png",
+            "CHF": "chf.png",
+            "AED": "aed.png",
+            "TRY": "try.png"
+        }
+    },
+    "breakpoints": [
+        {
+            "id": "narrow",
+            "maxWidth": 240,
+            "gridLayout": {
+                "logoW": 40,
+                "headerH": 14,
+                "rowH": 22,
+                "colFlagX": 2,
+                "colFlagW": 18,
+                "colFlagH": 14,
+                "colCodeX": 22,
+                "colBuyX": 52,
+                "colBuyW": 70,
+                "colSellX": 124,
+                "colSellW": 66,
+                "fszHdr": 6,
+                "fszCode": 16,
+                "fszValue": 22,
+                "fszArrow": 13
+            }
+        }
+    ],
+    "sourceDir": "content/common/overlays",
+    "outputFile": "content/points/eurasia/output/final.jpg"
+}

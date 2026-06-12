@@ -1,0 +1,178 @@
+{
+    "points": [
+        // ─── Алматы ──────────────────────────────────────────────────────────────
+        {
+            "id": "megapark",
+            "name": "Mega Park",
+            "address": "Алматы, ул. Макатаева, д. 127/1",
+            "region": "Алматы",
+            "depCode": "MEGA PARK",
+            "composeConfigPath": "layout/points/megapark.compose.json",
+            "ratesJsonPath": "content/points/megapark/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "grand-park",
+            "name": "Гранд Парк",
+            "address": "Алматы, Ауэзовский р-он, ул. Кабдолова, стр. 1/4",
+            "region": "Алматы",
+            "depCode": "ГРАНД ПАРК",
+            "composeConfigPath": "layout/points/grand-park.compose.json",
+            "ratesJsonPath": "content/points/grand-park/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "forum",
+            "name": "Forum",
+            "address": "Алматы, пр. Сейфуллина, д. 617",
+            "region": "Алматы",
+            "depCode": "FORUM",
+            "composeConfigPath": "layout/points/forum.compose.json",
+            "ratesJsonPath": "content/points/forum/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "zeleny-bazar",
+            "name": "Зеленый Базар",
+            "address": "Алматы, Медеуский р-он, пр. Жибек Жолы, 53",
+            "region": "Алматы",
+            "depCode": "ЗЕЛЕНЫЙ БАЗАР",
+            "composeConfigPath": "layout/points/zeleny-bazar.compose.json",
+            "ratesJsonPath": "content/points/zeleny-bazar/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "rixos",
+            "name": "Rixos",
+            "address": "Алматы, пр. Достык, д. 89",
+            "region": "Алматы",
+            "depCode": "RIXOS",
+            "composeConfigPath": "layout/points/rixos.compose.json",
+            "ratesJsonPath": "content/points/rixos/rates.json",
+            "enabled": false
+        },
+        // ─── Алматинская область ─────────────────────────────────────────────────
+        {
+            "id": "aport",
+            "name": "Апорт",
+            "address": "Алматинская обл., Карасайский р-он, с. Иргели, Трасса Алматы-Бишкек, д. 767",
+            "region": "Алматинская область",
+            "depCode": "АПОРТ",
+            "composeConfigPath": "layout/points/aport.compose.json",
+            "ratesJsonPath": "content/points/aport/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "aport2",
+            "name": "Апорт 2",
+            "address": "Алматинская обл., Карасайский р-он, с. Иргели, Трасса Алматы-Бишкек, д. 767",
+            "region": "Алматинская область",
+            "depCode": "АПОРТ2",
+            "composeConfigPath": "layout/points/aport2.compose.json",
+            "ratesJsonPath": "content/points/aport2/rates.json",
+            "enabled": true
+        },
+        // ─── Астана ──────────────────────────────────────────────────────────────
+        {
+            "id": "khanshatyr",
+            "name": "Ханшатыр",
+            "address": "Астана, пр. Тұран, д. 37",
+            "region": "Астана",
+            "depCode": "ХАНШАТЫР",
+            "composeConfigPath": "layout/points/khanshatyr.compose.json",
+            "ratesJsonPath": "content/points/khanshatyr/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "saryarka",
+            "name": "Сарыарка",
+            "address": "Астана, пер. Жусан, д. 11",
+            "region": "Астана",
+            "depCode": "САРЫАРКА",
+            "composeConfigPath": "layout/points/saryarka.compose.json",
+            "ratesJsonPath": "content/points/saryarka/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "asia-park",
+            "name": "Asia Park",
+            "address": "Астана, пр. Кабанбай Батыра, д. 21",
+            "region": "Астана",
+            "depCode": "ASIA PARK",
+            "composeConfigPath": "layout/points/asia-park.compose.json",
+            "ratesJsonPath": "content/points/asia-park/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "eurasia",
+            "name": "Eurasia",
+            "address": "Астана, ул. Алексея Петрова, 24а/1",
+            "region": "Астана",
+            "depCode": "EURASIA",
+            "composeConfigPath": "layout/points/eurasia.compose.json",
+            "ratesJsonPath": "content/points/eurasia/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "arujan",
+            "name": "Аружан",
+            "address": "Астана, ул. Илияса Жансугурова, 8/1",
+            "region": "Астана",
+            "depCode": "АРУЖАН",
+            "composeConfigPath": "layout/points/arujan.compose.json",
+            "ratesJsonPath": "content/points/arujan/rates.json",
+            "enabled": true
+        },
+        {
+            "id": "khanshatyr-airport",
+            "name": "Аэропорт Астана",
+            "address": "Астана, ул. Кабанбай Батыра, 119",
+            "region": "Астана",
+            "depCode": "АЭРОПОРТ АСТАНА",
+            "composeConfigPath": "layout/points/khanshatyr-airport.compose.json",
+            "ratesJsonPath": "content/points/khanshatyr-airport/rates.json",
+            "enabled": false
+        },
+        {
+            "id": "mega-silk-way",
+            "name": "Mega Silk Way",
+            "address": "Астана, пр. Қабанбай Батыр, д. 62",
+            "region": "Астана",
+            "depCode": "MEGA SILK WAY",
+            "composeConfigPath": "layout/points/mega-silk-way.compose.json",
+            "ratesJsonPath": "content/points/mega-silk-way/rates.json",
+            "enabled": false
+        },
+        {
+            "id": "abu-dhabi",
+            "name": "Abu Dhabi",
+            "address": "Астана, р-н Есиль, ул. Сығанақ, 60/5",
+            "region": "Астана",
+            "depCode": "ABU DHABI",
+            "composeConfigPath": "layout/points/abu-dhabi.compose.json",
+            "ratesJsonPath": "content/points/abu-dhabi/rates.json",
+            "enabled": false
+        },
+        // ─── Прочие / неактивные ─────────────────────────────────────────────────
+        {
+            "id": "onemotion",
+            "name": "Onemotion",
+            "address": "Алматы, ул. Наурызбай батыра, дом 50",
+            "region": "Алматы",
+            "depCode": "Onemotion",
+            "composeConfigPath": "layout/points/onemotion.compose.json",
+            "ratesJsonPath": "content/points/onemotion/rates.json",
+            "enabled": false
+        },
+        {
+            "id": "aktobe",
+            "name": "Aktobe",
+            "address": "Актюбе",
+            "region": "Актобе",
+            "depCode": "AKTOBE",
+            "composeConfigPath": "layout/points/aktobe.compose.json",
+            "ratesJsonPath": "content/points/aktobe/rates.json",
+            "enabled": false
+        }
+    ]
+}

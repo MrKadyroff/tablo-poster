@@ -1,0 +1,24 @@
+{
+    // ─── Апорт — runtime settings ─────────────────────────────────────────────
+    // Алматинская обл., Карасайский р-он, с. Иргели, Трасса Алматы-Бишкек, д. 767
+    // Loaded when ActivePointId = "aport"
+    "LedUpdater": {
+        "WatchFolder": "content/points/aport/output",
+        "ScreenXmlPath": "config/screen.xml",
+        "ComposeConfigPath": "layout/points/aport.compose.json",
+        "RatesJsonPath": "content/points/aport/rates.json",
+        "ForceRemoteRoot": "",
+        "NetworkJsonPath": "content/points/aport/network.json",
+        "RelayOutRoot": "relay-output/aport",
+        "ControllerReloadUrl": ""
+    },
+    "OnbonLed": {
+        // TODO: set actual controller IP when known
+        "ControllerIp": "192.168.22.2",
+        "ControllerPort": 80,
+        // TODO: set actual screen dimensions when known (currently using megapark placeholder)
+        "ScreenWidth": 128,
+        "ScreenHeight": 160,
+        "DeviceType": 8792
+    }
+}

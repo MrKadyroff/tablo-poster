@@ -1,0 +1,148 @@
+{
+  "labels": {
+    "buy": [
+      "\u0421\u0430\u0442\u044B\u043F \u0430\u043B\u0430\u043C\u044B\u0437",
+      "\u041F\u043E\u043A\u0443\u043F\u0430\u0435\u043C",
+      "We buy"
+    ],
+    "sell": [
+      "\u0421\u0430\u0442\u0430\u043C\u044B\u0437",
+      "\u041F\u0440\u043E\u0434\u0430\u0435\u043C",
+      "We sell"
+    ]
+  },
+  "currencies": {
+    "USD": {
+      "buy": 488.1,
+      "sell": 489.8,
+      "prevBuy": 488.1,
+      "prevSell": 489.8
+    },
+    "EUR": {
+      "buy": 564.5,
+      "sell": 569.5,
+      "prevBuy": 564.5,
+      "prevSell": 569.5
+    },
+    "RUB": {
+      "buy": 6.53,
+      "sell": 6.63,
+      "prevBuy": 6.53,
+      "prevSell": 6.63
+    },
+    "CNY": {
+      "buy": 70.7,
+      "sell": 73.3,
+      "prevBuy": 70.7,
+      "prevSell": 73.3
+    },
+    "KGS": {
+      "buy": 5.44,
+      "sell": 5.83,
+      "prevBuy": 5.44,
+      "prevSell": 5.83
+    },
+    "TRY": {
+      "buy": 11.0,
+      "sell": 14.0,
+      "prevBuy": 11.0,
+      "prevSell": 14.0
+    },
+    "UZS": {
+      "buy": 0.04,
+      "sell": 0.045,
+      "prevBuy": 0.04,
+      "prevSell": 0.045
+    },
+    "AED": {
+      "buy": 118.0,
+      "sell": 132.0,
+      "prevBuy": 118.0,
+      "prevSell": 132.0
+    },
+    "GBP": {
+      "buy": 643.0,
+      "sell": 663.0,
+      "prevBuy": 643.0,
+      "prevSell": 663.0
+    },
+    "CHF": {
+      "buy": 600.0,
+      "sell": 620.0,
+      "prevBuy": 600.0,
+      "prevSell": 620.0
+    },
+    "JPY": {
+      "buy": 2.7,
+      "sell": 3.2,
+      "prevBuy": 2.7,
+      "prevSell": 3.2
+    },
+    "KRW": {
+      "buy": 0.3,
+      "sell": 0.36,
+      "prevBuy": 0.3,
+      "prevSell": 0.36
+    },
+    "INR": {
+      "buy": 3.8,
+      "sell": 4.8,
+      "prevBuy": 3.8,
+      "prevSell": 4.8
+    },
+    "THB": {
+      "buy": 12.7,
+      "sell": 15.7,
+      "prevBuy": 12.7,
+      "prevSell": 15.7
+    },
+    "VND": {
+      "buy": 0.012,
+      "sell": 0.022,
+      "prevBuy": 0.012,
+      "prevSell": 0.022
+    },
+    "IDR": {
+      "buy": 0.02,
+      "sell": 0.036,
+      "prevBuy": 0.02,
+      "prevSell": 0.036
+    },
+    "GOLD1": {
+      "buy": 63000.0,
+      "sell": 0.0,
+      "prevBuy": 63000.0,
+      "prevSell": 0.0
+    },
+    "GOLD5": {
+      "buy": 315000.0,
+      "sell": 0.0,
+      "prevBuy": 315000.0,
+      "prevSell": 0.0
+    },
+    "GOLD10": {
+      "buy": 630000.0,
+      "sell": 0.0,
+      "prevBuy": 630000.0,
+      "prevSell": 0.0
+    },
+    "GOLD20": {
+      "buy": 1260000.0,
+      "sell": 0.0,
+      "prevBuy": 1260000.0,
+      "prevSell": 0.0
+    },
+    "GOLD50": {
+      "buy": 3150000.0,
+      "sell": 0.0,
+      "prevBuy": 3150000.0,
+      "prevSell": 0.0
+    },
+    "GOLD100": {
+      "buy": 6300000.0,
+      "sell": 0.0,
+      "prevBuy": 6300000.0,
+      "prevSell": 0.0
+    }
+  }
+}

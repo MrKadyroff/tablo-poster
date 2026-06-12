@@ -1,0 +1,26 @@
+{
+    // ─── Megapark point — runtime settings ────────────────────────────────────
+    // This file is loaded on top of appsettings.json when ActivePointId = "megapark".
+    // Only point-specific overrides are listed here; global settings stay in appsettings.json.
+    "LedUpdater": {
+        "WatchFolder": "content/points/megapark/output",
+        "ScreenXmlPath": "config/screen.xml",
+        "ComposeConfigPath": "layout/points/megapark.compose.json",
+        "RatesJsonPath": "content/points/megapark/rates.json",
+        "ForceRemoteRoot": "NET_00000199",
+        "NetworkJsonPath": "content/points/megapark/network.json",
+        "RelayOutRoot": "relay-output/megapark",
+        "ControllerReloadUrl": ""
+    },
+    "OnbonLed": {
+        "ControllerIp": "192.168.22.1",
+        "ControllerPort": 80,
+        // Screen dimensions in pixels — fill in when physical LED panel size is known
+        "ScreenWidth": 560,
+        "ScreenHeight": 80,
+        // Controller model type code:
+        //   BX-Y04=8280  BX-Y08=8536  BX-Y2=8792  BX-Y2L=9304
+        //   BX-Y3=9048   BX-Y5E=10584 BX-Y1=9560  BX-Y1L=10072
+        "DeviceType": 8792
+    }
+}

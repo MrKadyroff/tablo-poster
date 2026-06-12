@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!--
+  Конфигурация LED-контроллера для LedImageUpdaterService.
+  Этот файл заменяет зависимость от LedshowYQ/LedYQ/screen.xml.
+
+  Поля для редактирования:
+    ftp_ip           — IP-адрес контроллера (совпадает с тем, к какому Wi-Fi подключён ПК)
+    ftp_port         — FTP-порт контроллера (обычно 21)
+    remote_ftp_dir   — имя директории на контроллере (network_id, например NET_00000199)
+    w / h            — ширина и высота экрана в пикселях
+    unique_identifier (screen)  — уникальный ID экрана (любой UUID, не менять без нужды)
+    unique_identifier (program) — уникальный ID программы  (любой UUID, не менять без нужды)
+-->
+<root_group xmlns="http://Ledshow.Xml/Model/Xml">
+  <group>
+    <screen
+        unique_identifier="9113ba01799545ce93d8feb21ed2d720"
+        w="560"
+        h="80"
+        ftp_ip="192.168.0.199"
+        ftp_port="21"
+        remote_ftp_dir="NET_00000199">
+      <program
+          unique_identifier="a7e8ba31d10f4eda86d9a66c96539811"
+          path="\LedYQ\program_list\9113ba01799545ce93d8feb21ed2d720_Прогармма-1.xml" />
+    </screen>
+  </group>
+</root_group>

@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Needed for Windows Service installation -->
+    <RuntimeIdentifiers>win-x64;osx-x64;linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <!-- Exclude the legacy .NET 4.0 SDK source tree — not compiled into this project.
+       P/Invoke declarations are inlined in Services/OnbonLedController.cs instead. -->
+  <ItemGroup>
+    <Compile Remove="BX_Y_CSharp_SDK\**" />
+    <None Remove="BX_Y_CSharp_SDK\**" />
+    <Content Remove="BX_Y_CSharp_SDK\**" />
+    <EmbeddedResource Remove="BX_Y_CSharp_SDK\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentFTP" Version="52.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="8.0.0" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
+    <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.5" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />
+  </ItemGroup>
+
+  <!-- Copy runtime data folders to output / publish directory -->
+  <ItemGroup>
+    <None Update="config\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="layout\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="content\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Onbon SDK native binaries. Keep them next to the exe for P/Invoke. -->
+    <Content Include="BX_Y_CSharp_SDK/BX_Y_CSharp_SDK/bin/x64/Debug/YQNetCom.dll;
+                      BX_Y_CSharp_SDK/BX_Y_CSharp_SDK/bin/x64/Debug/libcurl.dll;
+                      BX_Y_CSharp_SDK/BX_Y_CSharp_SDK/bin/x64/Debug/libssl-1_1-x64.dll;
+                      BX_Y_CSharp_SDK/BX_Y_CSharp_SDK/bin/x64/Debug/libcrypto-1_1-x64.dll;
+                      BX_Y_CSharp_SDK/BX_Y_CSharp_SDK/bin/x64/Debug/BouncyCastle.Crypto.dll;
+                      BX_Y_CSharp_SDK/BX_Y_CSharp_SDK/bin/x64/Debug/msvcr100.dll;
+                      BX_Y_CSharp_SDK/BX_Y_CSharp_SDK/bin/x64/Debug/msvcr110.dll;
+                      BX_Y_CSharp_SDK/BX_Y_CSharp_SDK/bin/x64/Debug/msvcr120.dll"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true"
+             Link="%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

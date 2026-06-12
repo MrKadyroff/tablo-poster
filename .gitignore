@@ -1,0 +1,24 @@
+# Build artifacts
+bin/
+obj/
+
+
+
+# IDE files
+.vs/
+.idea/
+.vscode/settings.json
+.vscode/launch.json
+*.user
+*.suo
+*.swp
+
+# OS files
+.DS_Store
+**/.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temp/log files
+*.tmp
+*.log
