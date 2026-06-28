@@ -1,27 +1,19 @@
 {
-    // ─── Гранд Парк — runtime settings ────────────────────────────────────────
-    // Алматы, Ауэзовский р-он, ул. Кабдолова, стр. 1/4
-    // Loaded when ActivePointId = "grand-park"
-    "LedUpdater": {
-        "WatchFolder": "content/points/grand-park/output",
-        "ScreenXmlPath": "config/screen.xml",
-        "ComposeConfigPath": "layout/points/grand-park.compose.json",
-        "RatesJsonPath": "content/points/grand-park/rates.json",
-        "ForceRemoteRoot": "",
-        "NetworkJsonPath": "content/points/grand-park/network.json",
-        "RelayOutRoot": "relay-output/grand-park",
-        "ControllerReloadUrl": ""
-    },
-    "OnbonLed": {
-        // TODO: set actual controller IP when known
-        "ControllerIp": "0.0.0.0",
-        "ControllerPort": 80,
-        // TODO: set actual screen dimensions when known (currently using megapark placeholder)
-        "ScreenWidth": 560,
-        "ScreenHeight": 80,
-        // Controller model type code:
-        //   BX-Y04=8280  BX-Y08=8536  BX-Y2=8792  BX-Y2L=9304
-        //   BX-Y3=9048   BX-Y5E=10584 BX-Y1=9560  BX-Y1L=10072
-        "DeviceType": 8792
-    }
+  "LedUpdater": {
+    "WatchFolder": "content/points/grand-park/output",
+    "ScreenXmlPath": "config/screen.xml",
+    "ComposeConfigPath": "layout/points/grand-park.compose.json",
+    "RatesJsonPath": "content/points/grand-park/rates.json",
+    "ForceRemoteRoot": "",
+    "NetworkJsonPath": "content/points/grand-park/network.json",
+    "RelayOutRoot": "relay-output/grand-park",
+    "ControllerReloadUrl": ""
+  },
+  "OnbonLed": {
+    "ControllerIp": "192.168.0.199",
+    "ControllerPort": 80,
+    "ScreenWidth": 320,
+    "ScreenHeight": 400,
+    "DeviceType": 8792
+  }
 }

@@ -7,7 +7,7 @@
     "gridLayout": {
         "mode": "singleColumn",
         "oversample": 4,
-        "flagsDir": "../flags",
+        "flagsDir": "flags",
         "logoFile": "logo.png",
         "left": [
             "USD",
@@ -56,6 +56,6 @@
         "fszValue": 13,
         "fszArrow": 8
     },
-    "sourceDir": "content/common/overlays",
+    "sourceDir": "content/common",
     "outputFile": "content/points/aport/output/final.jpg"
 }

@@ -5,21 +5,58 @@
         "height": 80
     },
     "gridLayout": {
+        "mode": "columns",
         "oversample": 4,
-        "flagsDir": "../flags",
+        "flagsDir": "flags",
         "logoFile": "logo.png",
-        "left": [
-            "USD",
-            "EUR",
-            "RUB",
-            "CNY"
+        "columnCount": 2,
+        "columns": [
+            {
+                "codes": ["USD", "EUR", "RUB", "CNY"],
+                "buy": ["Покупаем", "We buy"],
+                "sell": ["Продаем", "We sell"]
+            },
+            {
+                "codes": ["GBP", "CHF", "AED", "TRY"],
+                "buy": ["Покупаем", "We buy"],
+                "sell": ["Продаем", "We sell"]
+            }
         ],
-        "right": [
-            "GBP",
-            "CHF",
-            "AED",
-            "TRY"
-        ],
+        "left": ["USD", "EUR", "RUB", "CNY"],
+        "right": ["GBP", "CHF", "AED", "TRY"],
+
+        "logoX": 252,
+        "logoY": 18,
+        "logoW": 56,
+        "logoH": 44,
+
+        "headerBuyX": 114,
+        "headerBuyY": 1,
+        "headerSellX": 205,
+        "headerSellY": 1,
+
+        "rowsStartY": 16,
+        "rowH": 16,
+        "singleRows": 4,
+
+        "colFlagX": 30,
+        "colFlagW": 16,
+        "colFlagH": 12,
+        "colCodeX": 48,
+        "colBuyX": 70,
+        "colBuyW": 88,
+        "colSellX": 160,
+        "colSellW": 90,
+
+        "fszHdr": 6,
+        "fszCode": 12,
+        "fszValue": 13,
+        "fszArrow": 8,
+
+        "fontScaleX": 0.95,
+        "textStroke": 1,
+        "valueShiftX": 0,
+
         "flagFiles": {
             "USD": "usd.png",
             "EUR": "eur.png",
@@ -31,34 +68,6 @@
             "TRY": "try.png"
         }
     },
-    "breakpoints": [
-        {
-            "id": "narrow",
-            "maxWidth": 240,
-            "gridLayout": {
-                "logoW": 40,
-                "headerH": 14,
-                "rowH": 22,
-                "colFlagX": 2,
-                "colFlagW": 18,
-                "colFlagH": 14,
-                "colCodeX": 22,
-                "colBuyX": 52,
-                "colBuyW": 70,
-                "colSellX": 124,
-                "colSellW": 66,
-                "fszHdr": 6,
-                "fszCode": 16,
-                "fszValue": 22,
-                "fszArrow": 13
-            }
-        },
-        {
-            "id": "wide",
-            "minWidth": 241,
-            "gridLayout": {}
-        }
-    ],
-    "sourceDir": "content/common/overlays",
+    "sourceDir": "content/common",
     "outputFile": "content/points/megapark/output/final.jpg"
 }

@@ -36,10 +36,27 @@ internal static class OnbonSendIsolationHelper
             Environment.SetEnvironmentVariable("ONBON_HELPER_MODE", "1");
 
             var baseDir = AppContext.BaseDirectory;
-            var config = new ConfigurationBuilder()
+
+            var baseConfig = new ConfigurationBuilder()
                 .SetBasePath(baseDir)
                 .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
                 .Build();
+
+            var activePointId = baseConfig["ActivePointId"];
+
+            var configBuilder = new ConfigurationBuilder()
+                .SetBasePath(baseDir)
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
+
+            if (!string.IsNullOrWhiteSpace(activePointId))
+            {
+                var pointConfigRelative = Path.Combine("config", "points", $"{activePointId}.json");
+                var pointConfigFull = Path.Combine(baseDir, pointConfigRelative);
+                if (File.Exists(pointConfigFull))
+                    configBuilder.AddJsonFile(pointConfigRelative, optional: false, reloadOnChange: false);
+            }
+
+            var config = configBuilder.Build();
 
             var options = config.GetSection(OnbonOptions.SectionName).Get<OnbonOptions>();
             if (options is null)
@@ -60,7 +77,10 @@ internal static class OnbonSendIsolationHelper
                 Options.Create(options),
                 logStore);
 
-            var status = await controller.SendImageWithStatusAsync(imagePath, CancellationToken.None);
+            // The parent process already made the duplicate-skip decision before spawning
+            // this helper; here we always send what we were handed.
+            var status = await controller.SendImageWithStatusAsync(
+                imagePath, bypassDuplicateCheck: true, CancellationToken.None);
             if (status.Success)
             {
                 Console.WriteLine(status.Message);

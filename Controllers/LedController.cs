@@ -1,5 +1,7 @@
+using LedImageUpdaterService.Models;
 using LedImageUpdaterService.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace LedImageUpdaterService.Controllers;
 
@@ -12,18 +14,24 @@ namespace LedImageUpdaterService.Controllers;
 [Produces("application/json")]
 public sealed class LedController : ControllerBase
 {
-    private readonly OnbonLedController _led;
+    private readonly ILedController _led;
     private readonly LedBoardService _boardService;
     private readonly InMemoryLogStore _logStore;
+    private readonly OnbonOptions _onbonOptions;
+    private readonly ServiceOptions _serviceOptions;
 
     public LedController(
-        OnbonLedController led,
+        ILedController led,
         LedBoardService boardService,
-        InMemoryLogStore logStore)
+        InMemoryLogStore logStore,
+        IOptions<OnbonOptions> onbonOptions,
+        IOptions<ServiceOptions> serviceOptions)
     {
         _led = led;
         _boardService = boardService;
         _logStore = logStore;
+        _onbonOptions = onbonOptions.Value;
+        _serviceOptions = serviceOptions.Value;
     }
 
     // ─── POST /api/led/update ─────────────────────────────────────────────────
@@ -75,6 +83,58 @@ public sealed class LedController : ControllerBase
             IsOnline: result.IsOnline,
             Details: result.Details,
             CheckedAt: DateTimeOffset.UtcNow));
+    }
+
+    // ─── GET /api/led/timer-status ───────────────────────────────────────────
+
+    /// <summary>
+    /// Returns runtime state of scheduled auto-send loop (ticks, last success/failure).
+    /// Useful to quickly identify timer-send failures.
+    /// </summary>
+    [HttpGet("timer-status")]
+    [ProducesResponseType(typeof(LedBoardRuntimeStatus), StatusCodes.Status200OK)]
+    public IActionResult GetTimerStatus()
+    {
+        return Ok(_boardService.GetRuntimeStatus());
+    }
+
+    // ─── GET /api/led/diagnostics ────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns an extended diagnostics snapshot:
+    /// connection, timer state, SDK options and live controller probes.
+    /// </summary>
+    [HttpGet("diagnostics")]
+    [ProducesResponseType(typeof(LedDiagnosticsDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetDiagnostics(CancellationToken ct)
+    {
+        var connection = await _led.CheckConnectionAsync(ct);
+        var timer = _boardService.GetRuntimeStatus();
+        var status = await _led.GetScreenStatusAsync(ct);
+        var info = await _led.GetControllerInfoAsync(ct);
+        var firmware = await _led.GetFirmwareAsync(ct);
+
+        return Ok(new LedDiagnosticsDto(
+            CheckedAt: DateTimeOffset.UtcNow,
+            ConnectionOnline: connection.IsOnline,
+            ConnectionDetails: connection.Details,
+            Timer: timer,
+            ActivePointId: HttpContext.RequestServices
+                .GetRequiredService<IConfiguration>()["ActivePointId"] ?? string.Empty,
+            Config: new LedDiagnosticsConfigDto(
+                RunMode: _serviceOptions.RunMode,
+                WatchFolder: _serviceOptions.WatchFolder,
+                LayoutTestMode: _serviceOptions.LayoutTestMode,
+                AutoSend: _onbonOptions.AutoSend,
+                PollSeconds: _onbonOptions.PollSeconds,
+                ControllerIp: _onbonOptions.ControllerIp,
+                ControllerPort: _onbonOptions.ControllerPort,
+                ScreenWidth: _onbonOptions.ScreenWidth,
+                ScreenHeight: _onbonOptions.ScreenHeight,
+                DeviceType: _onbonOptions.DeviceType),
+            ScreenStatus: status,
+            ControllerInfo: info,
+            Firmware: firmware));
     }
 
     // ─── POST /api/led/clear ──────────────────────────────────────────────────
@@ -152,7 +212,8 @@ public sealed class LedController : ControllerBase
             await using (var fs = System.IO.File.Create(tmpPath))
                 await file.CopyToAsync(fs, ct);
 
-            var status = await _led.SendImageWithStatusAsync(tmpPath, ct);
+            // Manual upload from Swagger/UI — always send, even if identical to the last image.
+            var status = await _led.SendImageWithStatusAsync(tmpPath, bypassDuplicateCheck: true, ct);
             var response = new LedSendResponse(
                 Success: status.Success,
                 Message: status.Success
@@ -366,3 +427,26 @@ public sealed record LedSendResponse(
     string ErrorType,
     string ErrorDetails,
     bool DuplicateSkipped);
+
+public sealed record LedDiagnosticsConfigDto(
+    string RunMode,
+    string WatchFolder,
+    bool LayoutTestMode,
+    bool AutoSend,
+    int PollSeconds,
+    string ControllerIp,
+    int ControllerPort,
+    int ScreenWidth,
+    int ScreenHeight,
+    int DeviceType);
+
+public sealed record LedDiagnosticsDto(
+    DateTimeOffset CheckedAt,
+    bool ConnectionOnline,
+    string ConnectionDetails,
+    LedBoardRuntimeStatus Timer,
+    string ActivePointId,
+    LedDiagnosticsConfigDto Config,
+    ScreenStatusInfo? ScreenStatus,
+    ControllerHardwareInfo? ControllerInfo,
+    FirmwareInfo? Firmware);

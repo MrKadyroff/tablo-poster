@@ -47,8 +47,9 @@ xcopy /E /I /Y "%SRC%layout" "%OUT%\layout" >nul
 :: ── 6. Общие ресурсы (флаги, шрифты, overlays) ───────────────────────────
 xcopy /E /I /Y "%SRC%content\common" "%OUT%\content\common" >nul
 
-:: ── 7. Контент и выходные папки для всех точек ───────────────────────────
-:: Копируем images (static assets), создаём output и (где есть) archive
+:: ── 7. Контент точек (images/rates/network/...) ──────────────────────────
+:: Копируем ВСЮ папку точки, чтобы в поставке были актуальные rates.json,
+:: network.json, images и прочие point-specific файлы.
 for %%P in (
     megapark
     grand-park
@@ -62,10 +63,10 @@ for %%P in (
     eurasia
     arujan
 ) do (
-    if exist "%SRC%content\points\%%P\images" (
-        xcopy /E /I /Y "%SRC%content\points\%%P\images" "%OUT%\content\points\%%P\images" >nul
+    if exist "%SRC%content\points\%%P" (
+        xcopy /E /I /Y "%SRC%content\points\%%P" "%OUT%\content\points\%%P" >nul
     ) else (
-        if not exist "%OUT%\content\points\%%P\images" mkdir "%OUT%\content\points\%%P\images"
+        if not exist "%OUT%\content\points\%%P" mkdir "%OUT%\content\points\%%P"
     )
     if not exist "%OUT%\content\points\%%P\output" mkdir "%OUT%\content\points\%%P\output"
 )
@@ -101,8 +102,9 @@ echo ============================================================
 echo  1. Скопировать %ZIP% на целевой ПК (или папку publish-win\)
 echo  2. Распаковать в любую папку, например C:\LedImageUpdater\
 echo  3. Открыть appsettings.json и проверить:
-echo       - config/screen.xml  -- IP контроллера, размер экрана
-echo       - RatesDepCode        -- название отделения в API
+echo       - ActivePointId        -- id точки (например: aport2)
+echo       - config\points\<pointId^>.json -- IP/порт/размер экрана
+echo       - layout\points\index.json      -- depCode для API курсов
 echo  4. Запустить install-service.ps1 от Администратора
 echo  5. Сервис будет стартовать автоматически с Windows
 echo ============================================================

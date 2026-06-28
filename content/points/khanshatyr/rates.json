@@ -13,22 +13,22 @@
   },
   "currencies": {
     "USD": {
-      "buy": 485.0,
-      "sell": 492.0,
-      "prevBuy": 485.0,
-      "prevSell": 492.0
+      "buy": 484.0,
+      "sell": 491.0,
+      "prevBuy": 484.0,
+      "prevSell": 491.0
     },
     "EUR": {
-      "buy": 562.0,
-      "sell": 572.0,
-      "prevBuy": 562.0,
-      "prevSell": 572.0
+      "buy": 563.0,
+      "sell": 573.0,
+      "prevBuy": 563.0,
+      "prevSell": 573.0
     },
     "RUB": {
-      "buy": 6.5,
-      "sell": 6.8,
-      "prevBuy": 6.5,
-      "prevSell": 6.8
+      "buy": 6.35,
+      "sell": 6.65,
+      "prevBuy": 6.35,
+      "prevSell": 6.65
     },
     "CNY": {
       "buy": 69.5,
@@ -115,40 +115,40 @@
       "prevSell": 135.0
     },
     "GOLD1": {
-      "buy": 63000.0,
-      "sell": 68000.0,
-      "prevBuy": 63000.0,
-      "prevSell": 68000.0
+      "buy": 66000.0,
+      "sell": 0.0,
+      "prevBuy": 66000.0,
+      "prevSell": 0.0
     },
     "GOLD5": {
-      "buy": 315000.0,
-      "sell": 340000.0,
-      "prevBuy": 315000.0,
-      "prevSell": 340000.0
+      "buy": 330000.0,
+      "sell": 0.0,
+      "prevBuy": 330000.0,
+      "prevSell": 0.0
     },
     "GOLD10": {
-      "buy": 630000.0,
-      "sell": 680000.0,
-      "prevBuy": 630000.0,
-      "prevSell": 680000.0
+      "buy": 660000.0,
+      "sell": 0.0,
+      "prevBuy": 660000.0,
+      "prevSell": 0.0
     },
     "GOLD20": {
-      "buy": 1260000.0,
-      "sell": 1360000.0,
-      "prevBuy": 1260000.0,
-      "prevSell": 1360000.0
+      "buy": 1320000.0,
+      "sell": 0.0,
+      "prevBuy": 1320000.0,
+      "prevSell": 0.0
     },
     "GOLD50": {
-      "buy": 3150000.0,
-      "sell": 3400000.0,
-      "prevBuy": 3150000.0,
-      "prevSell": 3400000.0
+      "buy": 3300000.0,
+      "sell": 0.0,
+      "prevBuy": 3300000.0,
+      "prevSell": 0.0
     },
     "GOLD100": {
-      "buy": 6300000.0,
-      "sell": 6800000.0,
-      "prevBuy": 6300000.0,
-      "prevSell": 6800000.0
+      "buy": 6600000.0,
+      "sell": 0.0,
+      "prevBuy": 6600000.0,
+      "prevSell": 0.0
     },
     "AMD": {
       "buy": 0.5,

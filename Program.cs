@@ -2,134 +2,153 @@ using LedImageUpdaterService;
 using LedImageUpdaterService.Controllers;
 using LedImageUpdaterService.Models;
 using LedImageUpdaterService.Services;
+using LedImageUpdaterService.UI;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.OpenApi.Models;
 
+// ─── Helper-process mode (Onbon SDK isolation) ────────────────────────────────
 if (OnbonSendIsolationHelper.IsHelperInvocation(args))
 {
     Environment.ExitCode = await OnbonSendIsolationHelper.RunAsync(args);
     return;
 }
 
-// ─── Builder ──────────────────────────────────────────────────────────────────
+// ─── Decide: Windows Service vs Tray app ─────────────────────────────────────
+bool runAsService = WindowsServiceHelpers.IsWindowsService() || args.Contains("--service");
 
-var builder = WebApplication.CreateBuilder(args);
-
-// ─── Point config overlay ─────────────────────────────────────────────────────
-// Read ActivePointId from the base configuration, then layer config/points/{id}.json
-// on top so point-specific settings (IP, screen size, paths) override the defaults.
+if (runAsService)
 {
-    var activePointId = builder.Configuration["ActivePointId"];
-    if (string.IsNullOrWhiteSpace(activePointId))
-        throw new InvalidOperationException(
-            "ActivePointId is not set in appsettings.json. " +
-            "Add \"ActivePointId\": \"<pointId>\" and create config/points/<pointId>.json.");
+    // Headless service mode (installed as Windows Service)
+    var app = Program.BuildWebApp(args);
+    await app.RunAsync();
+}
+else
+{
+    // Interactive tray-app mode — single instance only.
+    using var singleInstance = new Mutex(initiallyOwned: true, "eCashTablo_SingleInstance_Mutex", out bool isNew);
+    if (!isNew)
+    {
+        MessageBox.Show(
+            "eCash Tablo уже запущен.\nЗначок находится в области уведомлений (рядом с часами).",
+            "eCash Tablo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        return;
+    }
 
-    var pointConfigPath = Path.Combine(
-        builder.Environment.ContentRootPath, "config", "points", $"{activePointId}.json");
-
-    if (!File.Exists(pointConfigPath))
-        throw new InvalidOperationException(
-            $"Point config file not found: {pointConfigPath}. " +
-            $"Create config/points/{activePointId}.json with point-specific settings.");
-
-    builder.Configuration.AddJsonFile(pointConfigPath, optional: false, reloadOnChange: true);
+    Application.EnableVisualStyles();
+    Application.SetCompatibleTextRenderingDefault(false);
+    Application.Run(new TrayApplicationContext(args));
+    GC.KeepAlive(singleInstance);
 }
 
-// Windows Service support (no-op on macOS / Linux — safe to always call)
-builder.Host.UseWindowsService(options =>
+// ─── Shared host factory ──────────────────────────────────────────────────────
+
+internal static partial class Program
 {
-    options.ServiceName = "TabloPosterService";
-});
-
-// ─── Configuration ────────────────────────────────────────────────────────────
-
-builder.Services.AddOptions<ServiceOptions>()
-    .Bind(builder.Configuration.GetSection(ServiceOptions.SectionName))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-builder.Services.AddOptions<OnbonOptions>()
-    .Bind(builder.Configuration.GetSection(OnbonOptions.SectionName))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-// ─── Infrastructure services ──────────────────────────────────────────────────
-
-builder.Services.AddHttpClient();
-
-// Shared in-memory log buffer used by /api/led/logs
-builder.Services.AddSingleton<InMemoryLogStore>();
-
-// ─── Domain services ──────────────────────────────────────────────────────────
-
-builder.Services.AddSingleton<ScreenModelReader>();
-builder.Services.AddSingleton<LedPayloadBuilder>();
-builder.Services.AddSingleton<WifiNetworkGuard>();
-builder.Services.AddSingleton<ControllerDiscovery>();
-builder.Services.AddSingleton<DotnetComposer>();
-builder.Services.AddSingleton<RenderOnlyRunner>();
-builder.Services.AddSingleton<IPublishStrategy, FtpPublisher>();
-builder.Services.AddSingleton<IPublishStrategy, RelayPublisher>();
-
-// Onbon SDK wrapper — must be Singleton so init_sdk/release_sdk is called once
-builder.Services.AddSingleton<OnbonLedController>();
-
-// ─── Background services ──────────────────────────────────────────────────────
-
-builder.Services.AddHostedService<RatesFetcherService>();
-builder.Services.AddHostedService<Worker>();
-
-// LedBoardService is also registered as a singleton so LedController can call
-// ForceUpdateAsync() on the same instance the background loop uses.
-builder.Services.AddSingleton<LedBoardService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<LedBoardService>());
-
-// ─── Web API + Swagger ────────────────────────────────────────────────────────
-
-builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-
-// CORS — allow any origin so Windows apps (WPF, WinForms, Blazor, WebView2) can call the API
-const string CorsPolicy = "AllowAll";
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy(CorsPolicy, policy =>
+    internal static WebApplication BuildWebApp(string[] args)
     {
-        policy
-            .AllowAnyOrigin()
-            .AllowAnyMethod()
-            .AllowAnyHeader();
-    });
-});
+        var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "Tablo Poster — LED Management API",
-        Version = "v1",
-        Description =
-            "REST API for manual control of the Onbon BX-Y LED controller.\n\n" +
-            "**Note:** endpoints that interact with the SDK (update, clear, upload) " +
-            "require the service to be running on Windows with YQNetCom.dll present. " +
-            "Connection check and log retrieval work on any platform.",
-    });
-});
+        // Logging
+        builder.Logging.ClearProviders();
+        builder.Logging.AddConsole();
+        builder.Logging.SetMinimumLevel(LogLevel.Information);
 
-// ─── App pipeline ─────────────────────────────────────────────────────────────
+        // ─── Point config overlay ─────────────────────────────────────────
+        var activePointId = builder.Configuration["ActivePointId"];
+        if (string.IsNullOrWhiteSpace(activePointId))
+            throw new InvalidOperationException(
+                "ActivePointId is not set in appsettings.json.");
 
-var app = builder.Build();
+        var pointConfigPath = Path.Combine(
+            builder.Environment.ContentRootPath, "config", "points", $"{activePointId}.json");
 
-// Swagger is always enabled — restrict in production if needed
-app.UseSwagger();
-app.UseSwaggerUI(c =>
-{
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Tablo Poster API v1");
-    c.RoutePrefix = string.Empty; // Serve Swagger UI at https://localhost:<port>/
-    c.DocumentTitle = "Tablo Poster — LED API";
-});
+        if (!File.Exists(pointConfigPath))
+            throw new InvalidOperationException(
+                $"Point config file not found: {pointConfigPath}");
 
-app.UseCors(CorsPolicy);
-app.MapControllers();
+        builder.Configuration.AddJsonFile(pointConfigPath, optional: false, reloadOnChange: true);
 
-app.Run();
+        // Windows Service support
+        builder.Host.UseWindowsService(options =>
+        {
+            options.ServiceName = "eCashTabloService";
+        });
+
+        // ─── Options ──────────────────────────────────────────────────────
+        builder.Services.AddOptions<ServiceOptions>()
+            .Bind(builder.Configuration.GetSection(ServiceOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        builder.Services.AddOptions<OnbonOptions>()
+            .Bind(builder.Configuration.GetSection(OnbonOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        // Telegram notifications are optional; bind without ValidateOnStart so a
+        // missing/empty section never blocks startup.
+        builder.Services.AddOptions<TelegramOptions>()
+            .Bind(builder.Configuration.GetSection(TelegramOptions.SectionName));
+
+        // ─── Infrastructure ───────────────────────────────────────────────
+        builder.Services.AddHttpClient();
+        builder.Services.AddSingleton<InMemoryLogStore>();
+        builder.Services.AddSingleton<TelegramNotifier>();
+
+        // ─── Domain services ──────────────────────────────────────────────
+        builder.Services.AddSingleton<ScreenModelReader>();
+        builder.Services.AddSingleton<LedPayloadBuilder>();
+        builder.Services.AddSingleton<WifiNetworkGuard>();
+        builder.Services.AddSingleton<ControllerDiscovery>();
+        builder.Services.AddSingleton<DotnetComposer>();
+        builder.Services.AddSingleton<RenderOnlyRunner>();
+        builder.Services.AddSingleton<IPublishStrategy, FtpPublisher>();
+        builder.Services.AddSingleton<IPublishStrategy, RelayPublisher>();
+
+        // Onbon BX-Y (YQNetCom.dll) is the only LED transport in this application.
+        builder.Services.AddSingleton<OnbonLedController>();
+        builder.Services.AddSingleton<ILedController>(sp =>
+            sp.GetRequiredService<OnbonLedController>());
+
+        // ─── Background workers ───────────────────────────────────────────
+        builder.Services.AddHostedService<RatesFetcherService>();
+        builder.Services.AddHostedService<Worker>();
+        builder.Services.AddSingleton<LedBoardService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LedBoardService>());
+
+        // ─── Web API + Swagger ────────────────────────────────────────────
+        builder.Services.AddControllers();
+        builder.Services.AddEndpointsApiExplorer();
+
+        const string CorsPolicy = "AllowAll";
+        builder.Services.AddCors(options =>
+            options.AddPolicy(CorsPolicy, p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+
+        builder.Services.AddSwaggerGen(c =>
+        {
+            c.SwaggerDoc("v1", new OpenApiInfo
+            {
+                Title = "eCash Tablo — LED Management API",
+                Version = "v1",
+                Description = "REST API for manual control of the Onbon BX-Y LED controller.",
+            });
+        });
+
+        // ─── Build & configure pipeline ───────────────────────────────────
+        var app = builder.Build();
+
+        app.UseSwagger();
+        app.UseSwaggerUI(c =>
+        {
+            c.SwaggerEndpoint("/swagger/v1/swagger.json", "eCash Tablo API v1");
+            c.RoutePrefix = string.Empty;
+            c.DocumentTitle = "eCash Tablo — LED API";
+        });
+
+        app.UseCors(CorsPolicy);
+        app.MapControllers();
+
+        return app;
+    }
+}

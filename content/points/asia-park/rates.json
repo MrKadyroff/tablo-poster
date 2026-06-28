@@ -13,22 +13,22 @@
   },
   "currencies": {
     "USD": {
-      "buy": 486.0,
-      "sell": 489.0,
-      "prevBuy": 486.0,
-      "prevSell": 489.0
+      "buy": 488.0,
+      "sell": 491.0,
+      "prevBuy": 488.0,
+      "prevSell": 491.0
     },
     "EUR": {
-      "buy": 564.0,
-      "sell": 570.0,
-      "prevBuy": 564.0,
-      "prevSell": 570.0
+      "buy": 565.0,
+      "sell": 571.0,
+      "prevBuy": 565.0,
+      "prevSell": 571.0
     },
     "RUB": {
-      "buy": 6.5,
-      "sell": 6.75,
-      "prevBuy": 6.5,
-      "prevSell": 6.75
+      "buy": 6.41,
+      "sell": 6.65,
+      "prevBuy": 6.41,
+      "prevSell": 6.65
     },
     "CNY": {
       "buy": 69.5,

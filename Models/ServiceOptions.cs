@@ -50,6 +50,18 @@ public sealed class ServiceOptions
     // If true, force RenderOnly behavior for safe layout testing and disable board auto-send.
     public bool LayoutTestMode { get; init; }
 
+    // If true (default), the point has permanent (wired) internet: rates are fetched,
+    // the image is rendered AND it is auto-sent to the board on the poll timer (current behavior).
+    // If false, the point has no stable internet: rates are still fetched and the image is still
+    // rendered, but the board is NOT auto-sent on a timer — the operator pushes it manually with the
+    // "Отправить на табло" button on the Design tab. This avoids the crash loop on flaky connections.
+    public bool PermanentInternet { get; init; } = true;
+
+    // Expected Wi-Fi network name (SSID) of the LED board's access point. Used by the
+    // board-send failure flow to detect/reconnect a wrong Wi-Fi and raise the standalone
+    // alert. Empty = no SSID check. Bound from "LedUpdater:WifiSsid" (per-point config).
+    public string WifiSsid { get; init; } = "";
+
     // Optional fixed remote root (example: NET_00000199). If empty, service takes value from screen.xml.
     public string? ForceRemoteRoot { get; init; }
 

@@ -17,6 +17,8 @@ using SixLabors.ImageSharp.Formats.Bmp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using Image = SixLabors.ImageSharp.Image;
+using Size = SixLabors.ImageSharp.Size;
 
 namespace LedImageUpdaterService.Services;
 
@@ -31,7 +33,7 @@ namespace LedImageUpdaterService.Services;
 ///   • Set <c>OnbonLed:Enabled = false</c> in appsettings to suppress even the
 ///     "non-Windows" warning during local development.
 /// </summary>
-public sealed class OnbonLedController : IDisposable
+public sealed class OnbonLedController : IDisposable, ILedController
 {
     private readonly ILogger<OnbonLedController> _logger;
     private readonly OnbonOptions _options;
@@ -47,6 +49,19 @@ public sealed class OnbonLedController : IDisposable
     private int _lastSdkSendErrorCode;
     private readonly bool _isHelperProcess =
         string.Equals(Environment.GetEnvironmentVariable("ONBON_HELPER_MODE"), "1", StringComparison.Ordinal);
+
+    // ─── Process-wide SDK state ──────────────────────────────────────────────
+    // The native YQNetCom.dll keeps PROCESS-GLOBAL state: init_sdk()/release_sdk()
+    // and the P/Invoke resolver must run exactly once per process. The tray app
+    // rebuilds the whole host (and this singleton) on "Restart", so without these
+    // guards the second InitializeSdk() throws (resolver already set) or crashes
+    // the process by re-initializing the native SDK. These statics let a restarted
+    // host safely reuse the SDK that was initialized on first launch.
+    private static readonly object _sdkInitGate = new();
+    private static bool _sdkInitializedProcessWide;
+    private static bool _sdkResolverRegistered;
+    private static bool _processExitReleaseHooked;
+    private static bool _sdkReleasedProcessWide;
 
     // ─── P/Invoke declarations (YQNetCom.dll) ────────────────────────────────
     // These are only CALLED on Windows; declarations compile on every OS.
@@ -285,23 +300,14 @@ public sealed class OnbonLedController : IDisposable
     }
 
     /// <summary>
-    /// Sends an image file to the LED controller.
-    /// Non-BMP files are automatically converted before sending.
-    /// Retries up to <c>OnbonLed:RetryCount</c> times on failure.
-    /// </summary>
-    public async Task<bool> SendImageAsync(string imagePath, CancellationToken ct = default)
-    {
-        var status = await SendImageWithStatusAsync(imagePath, ct);
-        return status.Success;
-    }
-
-    /// <summary>
     /// Sends an image file to the LED controller and returns typed error details.
     /// This method is used by the upload endpoint to provide stable diagnostics.
     /// </summary>
-    public async Task<LedSendStatus> SendImageWithStatusAsync(string imagePath, CancellationToken ct = default)
+    public async Task<LedSendStatus> SendImageWithStatusAsync(
+        string imagePath, bool bypassDuplicateCheck = false, CancellationToken ct = default)
     {
-        Log(LogLevel.Information, $"[SendImage] Requested: {imagePath}");
+        Log(LogLevel.Information,
+            $"[SendImage] Requested: {imagePath}{(bypassDuplicateCheck ? " (manual — duplicate check bypassed)" : "")}");
 
         if (!File.Exists(imagePath))
         {
@@ -333,16 +339,23 @@ public sealed class OnbonLedController : IDisposable
 
         try
         {
+            // Always compute the hash (so a successful send records it for the next
+            // auto-send to dedup against), but only short-circuit on a duplicate when the
+            // caller did not request a bypass. Manual sends pass bypassDuplicateCheck=true
+            // so pressing "Отправить на табло" always re-pushes the same image.
             if (_options.SkipDuplicateUploads)
             {
                 normalizedBmpHash = await ComputeSha256Async(bmpPath, ct);
-                lock (_hashLock)
+                if (!bypassDuplicateCheck)
                 {
-                    if (_lastSentImageHash is not null && _lastSentImageHash == normalizedBmpHash)
+                    lock (_hashLock)
                     {
-                        Log(LogLevel.Information,
-                            "[SendImage] Skipped duplicate image (same normalized BMP hash as previous send).");
-                        return LedSendStatus.Ok("Skipped duplicate image (already sent).", duplicateSkipped: true);
+                        if (_lastSentImageHash is not null && _lastSentImageHash == normalizedBmpHash)
+                        {
+                            Log(LogLevel.Information,
+                                "[SendImage] Skipped duplicate image (same normalized BMP hash as previous send).");
+                            return LedSendStatus.Ok("Skipped duplicate image (already sent).", duplicateSkipped: true);
+                        }
                     }
                 }
             }
@@ -479,31 +492,50 @@ public sealed class OnbonLedController : IDisposable
             }
         }
 
+        // If isolated sender failed with SDK error, try once in-process to
+        // bypass helper-process specifics and get a cleaner native call path.
+        if (!status.Success
+            && status.ErrorType == LedSendErrorType.SdkSendFailed
+            && _options.UseIsolatedSender
+            && !_isHelperProcess)
+        {
+            Log(LogLevel.Warning,
+                "[SendImage] Isolated sender failed with SDK error. Retrying once in-process...");
+
+            _lastSdkSendErrorCode = 0;
+            status = await SendImageInProcessAsync(preparedPath, ct);
+        }
+
+        // Some controllers recover after clearing current playlist/programs.
+        // Try one recovery cycle: clear screen, short delay, resend.
+        if (!status.Success
+            && status.ErrorType == LedSendErrorType.SdkSendFailed)
+        {
+            Log(LogLevel.Warning,
+                "[SendImage] SDK send failed. Trying recovery: clear screen then resend once...");
+
+            try
+            {
+                await ClearScreenAsync(ct);
+                await Task.Delay(400, ct);
+
+                _lastSdkSendErrorCode = 0;
+                status = (_options.UseIsolatedSender && !_isHelperProcess)
+                    ? await SendImageViaIsolatedProcessAsync(preparedPath, ct)
+                    : await SendImageInProcessAsync(preparedPath, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log(LogLevel.Warning,
+                    $"[SendImage] Recovery resend threw {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
         return status;
-    }
-
-    /// <summary>
-    /// Sends a SixLabors.ImageSharp image to the controller.
-    /// Saves to a temp BMP file internally then calls <see cref="SendImageAsync(string,CancellationToken)"/>.
-    /// </summary>
-    public async Task<bool> SendImageAsync(SixLabors.ImageSharp.Image image, CancellationToken ct = default)
-    {
-        Log(LogLevel.Information,
-            $"[SendImage] In-memory image received ({image.Width}x{image.Height}). Saving to temp BMP...");
-
-        var tempFile = Path.Combine(Path.GetTempPath(), $"onbon_{Guid.NewGuid():N}.bmp");
-        try
-        {
-            await using (var fs = File.Create(tempFile))
-                await image.SaveAsync(fs, new BmpEncoder(), ct);
-            Log(LogLevel.Debug, $"[SendImage] Temp BMP: {tempFile}");
-            return (await SendImageWithStatusAsync(tempFile, ct)).Success;
-        }
-        finally
-        {
-            if (File.Exists(tempFile))
-                try { File.Delete(tempFile); } catch { /* ignore */ }
-        }
     }
 
     private async Task<LedSendStatus> SendImageInProcessAsync(string bmpPath, CancellationToken ct)
@@ -1178,6 +1210,25 @@ public sealed class OnbonLedController : IDisposable
 
     private void InitializeSdk()
     {
+        lock (_sdkInitGate)
+        {
+            // Native SDK is process-global — initialize it once and reuse it across
+            // host restarts. Re-running init_sdk()/SetDllImportResolver() in the same
+            // process throws or crashes (see _sdkInitGate comment above).
+            if (_sdkInitializedProcessWide)
+            {
+                _sdkInitialized = true;
+                Log(LogLevel.Information,
+                    "[Onbon] SDK already initialized in this process — reusing it (host restart). Skipping re-init.");
+                return;
+            }
+
+            InitializeSdkCore();
+        }
+    }
+
+    private void InitializeSdkCore()
+    {
         var baseDir = AppContext.BaseDirectory;
         var processDir = Path.GetDirectoryName(Environment.ProcessPath ?? string.Empty) ?? string.Empty;
 
@@ -1199,8 +1250,13 @@ public sealed class OnbonLedController : IDisposable
         // Single-file apps extract managed code to %TEMP%, so the Windows DLL
         // loader's "app directory" is that temp folder — NOT the exe folder.
         // Register a resolver so P/Invoke explicitly loads from known paths.
-        NativeLibrary.SetDllImportResolver(typeof(OnbonLedController).Assembly,
-            (libraryName, assembly, searchPath) =>
+        // SetDllImportResolver throws if called twice for the same assembly, so
+        // guard it for the case where a previous init attempt registered it but
+        // init_sdk() itself failed and a later host build retries.
+        if (!_sdkResolverRegistered)
+        {
+            NativeLibrary.SetDllImportResolver(typeof(OnbonLedController).Assembly,
+                (libraryName, assembly, searchPath) =>
             {
                 if (libraryName is "YQNetCom.dll" or "YQNetCom")
                 {
@@ -1243,6 +1299,8 @@ public sealed class OnbonLedController : IDisposable
                 }
                 return IntPtr.Zero;
             });
+            _sdkResolverRegistered = true;
+        }
 
         try
         {
@@ -1252,6 +1310,8 @@ public sealed class OnbonLedController : IDisposable
             if (result == 0)
             {
                 _sdkInitialized = true;
+                _sdkInitializedProcessWide = true;
+                if (!_isHelperProcess) HookProcessExitRelease();
                 Log(LogLevel.Information, "[Onbon] init_sdk() succeeded. SDK is ready.");
             }
             else
@@ -1275,6 +1335,42 @@ public sealed class OnbonLedController : IDisposable
         catch (Exception ex)
         {
             Log(LogLevel.Error, $"[Onbon] Unexpected init error: {ex}");
+        }
+    }
+
+    /// <summary>
+    /// Registers a one-time process-exit handler that releases the native SDK.
+    /// Because the SDK is initialized once per process (and reused across host
+    /// restarts), it must also be released exactly once — at process shutdown,
+    /// not on every host dispose.
+    /// </summary>
+    private void HookProcessExitRelease()
+    {
+        if (_processExitReleaseHooked) return;
+        _processExitReleaseHooked = true;
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseSdkProcessWide();
+    }
+
+    private void ReleaseSdkProcessWide()
+    {
+        lock (_sdkInitGate)
+        {
+            if (!_sdkInitializedProcessWide || _sdkReleasedProcessWide) return;
+            if (!OperatingSystem.IsWindows()) return;
+
+            try
+            {
+                release_sdk();
+                _logger.LogInformation("[Onbon] SDK released cleanly on process exit.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[Onbon] Error during SDK release.");
+            }
+            finally
+            {
+                _sdkReleasedProcessWide = true;
+            }
         }
     }
 
@@ -1476,23 +1572,15 @@ public sealed class OnbonLedController : IDisposable
 
         _sdkLock.Dispose();
 
-        if (_sdkInitialized && OperatingSystem.IsWindows())
+        // Do NOT call release_sdk() here. The native SDK is process-global and is
+        // reused across host restarts (the tray app rebuilds this singleton on
+        // "Restart"). Releasing it on dispose would tear down the SDK that the
+        // next host needs, and re-initializing it later crashes the process.
+        // Release happens once, on actual process exit (see HookProcessExitRelease).
+        if (_isHelperProcess && _sdkInitialized && OperatingSystem.IsWindows())
         {
-            if (_isHelperProcess)
-            {
-                _logger.LogDebug("[Onbon] Helper mode: skipping release_sdk() on process exit.");
-                return;
-            }
-
-            try
-            {
-                release_sdk();
-                _logger.LogInformation("[Onbon] SDK released cleanly.");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[Onbon] Error during SDK release.");
-            }
+            // Short-lived helper process: let the OS reclaim native state on exit.
+            _logger.LogDebug("[Onbon] Helper mode: skipping release_sdk() on dispose.");
         }
     }
 }

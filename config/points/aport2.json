@@ -1,24 +1,19 @@
 {
-    // ─── Апорт 2 — runtime settings ───────────────────────────────────────────
-    // Алматинская обл., Карасайский р-он, с. Иргели, Трасса Алматы-Бишкек, д. 767
-    // Loaded when ActivePointId = "aport2"
-    "LedUpdater": {
-        "WatchFolder": "content/points/aport2/output",
-        "ScreenXmlPath": "config/screen.xml",
-        "ComposeConfigPath": "layout/points/aport2.compose.json",
-        "RatesJsonPath": "content/points/aport2/rates.json",
-        "ForceRemoteRoot": "",
-        "NetworkJsonPath": "content/points/aport2/network.json",
-        "RelayOutRoot": "relay-output/aport2",
-        "ControllerReloadUrl": ""
-    },
-    "OnbonLed": {
-        // TODO: set actual controller IP when known
-        "ControllerIp": "0.0.0.0",
-        "ControllerPort": 80,
-        // TODO: set actual screen dimensions when known (currently using megapark placeholder)
-        "ScreenWidth": 560,
-        "ScreenHeight": 80,
-        "DeviceType": 8792
-    }
+  "LedUpdater": {
+    "WatchFolder": "content/points/aport2/output",
+    "ScreenXmlPath": "config/screen.xml",
+    "ComposeConfigPath": "layout/points/aport2.compose.json",
+    "RatesJsonPath": "content/points/aport2/rates.json",
+    "ForceRemoteRoot": "",
+    "NetworkJsonPath": "content/points/aport2/network.json",
+    "RelayOutRoot": "relay-output/aport2",
+    "ControllerReloadUrl": ""
+  },
+  "OnbonLed": {
+    "ControllerIp": "192.168.22.2",
+    "ControllerPort": 80,
+    "ScreenWidth": 128,
+    "ScreenHeight": 256,
+    "DeviceType": 9304
+  }
 }

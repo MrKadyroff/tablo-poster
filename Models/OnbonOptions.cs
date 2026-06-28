@@ -36,6 +36,7 @@ public sealed class OnbonOptions
     /// Controller model type code used by the SDK.
     /// BX-Y04=8280  BX-Y08=8536  BX-Y2=8792  BX-Y2L=9304
     /// BX-Y3=9048   BX-Y5E=10584 BX-Y1=9560  BX-Y1L=10072
+    /// BX-C08=33026
     /// </summary>
     [Range(1000, 65535)]
     public int DeviceType { get; init; } = 8792; // BX-Y2
@@ -68,7 +69,7 @@ public sealed class OnbonOptions
     /// Polling interval for LedBoardService background send loop.
     /// </summary>
     [Range(5, 3600)]
-    public int PollSeconds { get; init; } = 30;
+    public int PollSeconds { get; init; } = 10;
 
     /// <summary>
     /// When false, LedBoardService will NOT automatically send images from the

@@ -163,6 +163,15 @@ public sealed class Worker : BackgroundService
                     {
                         _logger.LogError("Full: compose failed with exit code {ExitCode}", exitCode);
                     }
+                    else if (!_options.PermanentInternet)
+                    {
+                        // No permanent internet: render only, do NOT auto-publish on the timer.
+                        // The operator pushes the image manually from the Design tab.
+                        _lastRenderInputWriteUtc = latestInputUtc;
+                        _logger.LogInformation(
+                            "Full: PermanentInternet=false — изображение перерисовано, автоотправка пропущена. " +
+                            "Отправьте на табло вручную кнопкой «Отправить на табло».");
+                    }
                     else
                     {
                         // Step 2: pick the freshly rendered image from WatchFolder

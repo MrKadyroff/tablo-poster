@@ -1,4 +1,5 @@
 using LedImageUpdaterService.Models;
+using LedImageUpdaterService.UI;
 using Microsoft.Extensions.Options;
 
 namespace LedImageUpdaterService.Services;
@@ -18,26 +19,51 @@ namespace LedImageUpdaterService.Services;
 public sealed class LedBoardService : BackgroundService
 {
     private readonly ILogger<LedBoardService> _logger;
-    private readonly OnbonLedController _controller;
+    private readonly ILedController _controller;
     private readonly ServiceOptions _serviceOptions;
     private readonly OnbonOptions _onbonOptions;
     private readonly InMemoryLogStore _logStore;
+    private readonly TelegramNotifier _telegram;
+    private readonly string _pointId;
+
+    // While a send keeps failing we are in a "failure episode": we retry forever, but
+    // only once every FailureRetrySeconds so a dead Wi-Fi/controller never floods the
+    // logs or hammers the system. One Telegram message is sent when the episode starts
+    // and one when it recovers.
+    private const int FailureRetrySeconds = 60;
+    // Number of reconnect attempts to the board's Wi-Fi after a failed send.
+    private const int WifiReconnectAttempts = 3;
+    private bool _inFailureEpisode;
+    private bool _failureNotified;
+    private DateTimeOffset _nextAttemptUtc = DateTimeOffset.MinValue;
 
     private string? _lastSentFilePath;
     private DateTime _lastSentWriteUtc;
+    private long _tick;
+    private DateTimeOffset? _lastTickAt;
+    private DateTimeOffset? _lastAttemptAt;
+    private DateTimeOffset? _lastSuccessAt;
+    private DateTimeOffset? _lastFailureAt;
+    private string? _lastAttemptImage;
+    private string? _lastFailureErrorType;
+    private string? _lastFailureDetails;
 
     public LedBoardService(
         ILogger<LedBoardService> logger,
-        OnbonLedController controller,
+        ILedController controller,
         IOptions<ServiceOptions> serviceOptions,
         IOptions<OnbonOptions> onbonOptions,
-        InMemoryLogStore logStore)
+        InMemoryLogStore logStore,
+        TelegramNotifier telegram,
+        IConfiguration configuration)
     {
         _logger = logger;
         _controller = controller;
         _serviceOptions = serviceOptions.Value;
         _onbonOptions = onbonOptions.Value;
         _logStore = logStore;
+        _telegram = telegram;
+        _pointId = configuration["ActivePointId"] ?? "—";
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -49,6 +75,15 @@ public sealed class LedBoardService : BackgroundService
             return;
         }
 
+        if (!_serviceOptions.PermanentInternet)
+        {
+            Log(LogLevel.Information,
+                "[LedBoardService] PermanentInternet=false — таймерная автоотправка на табло отключена. " +
+                "Курсы обновляются и изображение генерируется как обычно; отправка на табло — вручную " +
+                "кнопкой «Отправить на табло» на вкладке «Дизайн» (или через API).");
+            return;
+        }
+
         if (!_onbonOptions.AutoSend)
         {
             Log(LogLevel.Information,
@@ -57,8 +92,12 @@ public sealed class LedBoardService : BackgroundService
             return;
         }
 
+        var watchDirResolved = Path.GetFullPath(_serviceOptions.WatchFolder);
+        var watchDirExists = Directory.Exists(watchDirResolved);
+        
         Log(LogLevel.Information,
             $"[LedBoardService] Started. WatchFolder={_serviceOptions.WatchFolder} " +
+            $"(resolved: {watchDirResolved}, exists={watchDirExists}) " +
             $"PollInterval={_onbonOptions.PollSeconds}s");
 
         // Give other services time to fully start before the first send attempt
@@ -68,6 +107,11 @@ public sealed class LedBoardService : BackgroundService
         {
             try
             {
+                _tick++;
+                _lastTickAt = DateTimeOffset.UtcNow;
+                Log(LogLevel.Information,
+                    $"[LedBoardService] Tick #{_tick}. Polling watch folder...");
+
                 await PollAndSendAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -90,18 +134,19 @@ public sealed class LedBoardService : BackgroundService
     private async Task PollAndSendAsync(CancellationToken ct)
     {
         var watchDir = _serviceOptions.WatchFolder;
+        var watchDirResolved = Path.GetFullPath(watchDir);
 
-        if (!Directory.Exists(watchDir))
+        if (!Directory.Exists(watchDirResolved))
         {
-            Log(LogLevel.Warning, $"[LedBoardService] WatchFolder does not exist: {watchDir}");
+            Log(LogLevel.Warning, $"[LedBoardService] WatchFolder does not exist: {watchDir} (resolved: {watchDirResolved})");
             return;
         }
 
-        var newest = GetNewestImage(watchDir);
+        var newest = GetNewestImage(watchDirResolved);
 
         if (newest is null)
         {
-            Log(LogLevel.Debug, $"[LedBoardService] No images found in {watchDir}");
+            Log(LogLevel.Information, $"[LedBoardService] No images found in {watchDirResolved}");
             return;
         }
 
@@ -114,30 +159,179 @@ public sealed class LedBoardService : BackgroundService
             return;
         }
 
+        // During a failure episode we keep retrying forever, but throttle to one attempt
+        // per FailureRetrySeconds so a dead network does not hammer the system or logs.
+        if (_inFailureEpisode && DateTimeOffset.UtcNow < _nextAttemptUtc)
+        {
+            var waitSec = (int)Math.Ceiling((_nextAttemptUtc - DateTimeOffset.UtcNow).TotalSeconds);
+            Log(LogLevel.Debug,
+                $"[LedBoardService] Retry throttled — next send attempt in ~{waitSec}s.");
+            return;
+        }
+
         Log(LogLevel.Information, $"[LedBoardService] New image detected: {newest.FullName}");
 
-        // Use the same send pipeline as /api/led/upload for identical behavior.
-        var status = await _controller.SendImageWithStatusAsync(newest.FullName, ct);
+        // Auto-send keeps the duplicate-skip optimization (bypassDuplicate=false).
+        var status = await SendWithRecoveryAsync(newest.FullName, bypassDuplicate: false, ct);
 
         if (status.Success)
         {
             _lastSentFilePath = newest.FullName;
             _lastSentWriteUtc = newest.LastWriteTimeUtc;
-            if (status.DuplicateSkipped)
-            {
-                Log(LogLevel.Information,
-                    $"[LedBoardService] Duplicate skipped: {newest.Name}. Details: {status.Message}");
-            }
-            else
-            {
-                Log(LogLevel.Information, $"[LedBoardService] Image sent successfully: {newest.Name}");
-            }
+        }
+    }
+
+    // ─── Shared send pipeline (auto + manual) ─────────────────────────────────
+
+    /// <summary>
+    /// Sends an image and, on failure, runs the recovery flow before retrying:
+    ///   attempt 1 → (on fail) Wi-Fi check + reconnect → attempt 2 → (on fail) notify.
+    /// On success it records a delivery confirmation. Telegram is sent only after two
+    /// failed attempts, once per failure episode.
+    /// </summary>
+    private async Task<LedSendStatus> SendWithRecoveryAsync(
+        string imagePath, bool bypassDuplicate, CancellationToken ct)
+    {
+        _lastAttemptAt = DateTimeOffset.UtcNow;
+        _lastAttemptImage = imagePath;
+        var name = Path.GetFileName(imagePath);
+
+        // Attempt 1
+        var status = await _controller.SendImageWithStatusAsync(imagePath, bypassDuplicate, ct);
+        if (status.Success)
+        {
+            await OnDeliverySuccessAsync(name, status, ct);
+            return status;
+        }
+
+        Log(LogLevel.Warning,
+            $"[LedBoardService] Попытка 1 не удалась: {name}. {status.ErrorType} — {status.Message}");
+
+        // Recovery: check Wi-Fi and try to reconnect to the board's network.
+        await RunWifiRecoveryAsync(ct);
+
+        // Attempt 2
+        status = await _controller.SendImageWithStatusAsync(imagePath, bypassDuplicate, ct);
+        if (status.Success)
+        {
+            await OnDeliverySuccessAsync(name, status, ct);
+            return status;
+        }
+
+        // Two failed attempts → record + notify (once per episode).
+        await OnDeliveryFailureAsync(name, status, ct);
+        return status;
+    }
+
+    private async Task OnDeliverySuccessAsync(string name, LedSendStatus status, CancellationToken ct)
+    {
+        _lastSuccessAt = DateTimeOffset.UtcNow;
+        _lastFailureAt = null;
+        _lastFailureErrorType = null;
+        _lastFailureDetails = null;
+
+        if (status.DuplicateSkipped)
+            Log(LogLevel.Information,
+                $"[LedBoardService] Дубликат пропущен (уже на табло): {name}. {status.Message}");
+        else
+            Log(LogLevel.Information,
+                $"[LedBoardService] ✅ Принято табло, показывается (ack OK): {name}");
+
+        // Board reachable again → close any standalone Wi-Fi alert.
+        WifiAlertBridge.RequestHide();
+
+        if (_inFailureEpisode)
+        {
+            _inFailureEpisode = false;
+            _failureNotified = false;
+            _nextAttemptUtc = DateTimeOffset.MinValue;
+            Log(LogLevel.Information,
+                $"[LedBoardService] Recovered: image delivered after failure episode: {name}");
+            await NotifyAsync(
+                $"✅ Точка {_pointId} ({_onbonOptions.ControllerIp}): связь восстановлена, " +
+                $"курс отправлен на табло.", ct);
+        }
+    }
+
+    private async Task OnDeliveryFailureAsync(string name, LedSendStatus status, CancellationToken ct)
+    {
+        _lastFailureAt = DateTimeOffset.UtcNow;
+        _lastFailureErrorType = status.ErrorType.ToString();
+        _lastFailureDetails = status.Message;
+
+        var conn = await _controller.CheckConnectionAsync(ct);
+        Log(LogLevel.Warning,
+            $"[LedBoardService] Доставка не удалась после 2 попыток: {name}. " +
+            $"ErrorType={status.ErrorType}; Details={status.Message}; " +
+            $"ConnectionOnline={conn.IsOnline}; ConnectionDetails={conn.Details}");
+
+        _inFailureEpisode = true;
+        _nextAttemptUtc = DateTimeOffset.UtcNow.AddSeconds(FailureRetrySeconds);
+
+        // Notify once per failure episode (i.e. after two failed attempts).
+        if (!_failureNotified)
+        {
+            _failureNotified = true;
+            await NotifyAsync(
+                $"❌ Точка {_pointId} ({_onbonOptions.ControllerIp}): курс не отправлен на табло " +
+                $"после 2 попыток.\n" +
+                $"Причина: {status.ErrorType} — {status.Message}\n" +
+                $"Связь с табло: {(conn.IsOnline ? "есть" : "НЕТ — проверьте Wi-Fi табло")}.\n" +
+                $"Повторяю отправку каждую минуту до успеха.", ct);
+        }
+    }
+
+    /// <summary>
+    /// After a failed send, checks whether the PC is on the board's Wi-Fi and, if not,
+    /// tries to reconnect (up to <see cref="WifiReconnectAttempts"/> times). If it still
+    /// cannot connect, asks the tray UI to raise the standalone alert. Runs only for
+    /// permanent-internet points with a configured SSID.
+    /// </summary>
+    private async Task RunWifiRecoveryAsync(CancellationToken ct)
+    {
+        if (!_serviceOptions.PermanentInternet) return;
+
+        var ssid = _serviceOptions.WifiSsid;
+        if (string.IsNullOrWhiteSpace(ssid)) return;
+
+        var current = await WifiInfo.GetConnectedSsidAsync();
+        if (!WifiInfo.IsWrongNetwork(ssid, current))
+        {
+            Log(LogLevel.Information,
+                $"[LedBoardService] Wi-Fi сеть верная ('{current}') — сбой не связан с Wi-Fi.");
+            return;
+        }
+
+        Log(LogLevel.Warning,
+            $"[LedBoardService] Неверная Wi-Fi сеть после сбоя: ожидается '{ssid}', " +
+            $"сейчас '{current ?? "(нет сети)"}'. Пробую переподключиться ({WifiReconnectAttempts} попытки)...");
+
+        bool reconnected = await WifiInfo.TryReconnectAsync(ssid, WifiReconnectAttempts, ct);
+        if (reconnected)
+        {
+            Log(LogLevel.Information, $"[LedBoardService] Переподключение к Wi-Fi '{ssid}' успешно.");
+            WifiAlertBridge.RequestHide();
         }
         else
         {
             Log(LogLevel.Warning,
-                $"[LedBoardService] Failed to send image: {newest.Name}. " +
-                $"ErrorType={status.ErrorType}; Details={status.Message}");
+                $"[LedBoardService] Не удалось переподключиться к '{ssid}' за {WifiReconnectAttempts} попытки. " +
+                $"Показываю предупреждение оператору.");
+            WifiAlertBridge.RequestShow(ssid, current);
+        }
+    }
+
+    private async Task NotifyAsync(string text, CancellationToken ct)
+    {
+        try
+        {
+            await _telegram.NotifyAsync(text, ct);
+        }
+        catch (Exception ex)
+        {
+            // TelegramNotifier already swallows errors; this is just a final safety net
+            // so notifications can never disrupt the send loop.
+            Log(LogLevel.Debug, $"[LedBoardService] Telegram notify error (ignored): {ex.Message}");
         }
     }
 
@@ -163,15 +357,28 @@ public sealed class LedBoardService : BackgroundService
 
     private async Task<bool> SendForceViaUploadPipelineAsync(string imagePath, CancellationToken ct)
     {
-        var status = await _controller.SendImageWithStatusAsync(imagePath, ct);
-        if (!status.Success)
-        {
-            Log(LogLevel.Warning,
-                $"[LedBoardService] ForceUpdate failed. ErrorType={status.ErrorType}; Details={status.Message}");
-        }
-
+        // Manual push ("Отправить на табло") always re-sends, even an identical image
+        // (bypassDuplicate=true), and goes through the same recovery + confirmation flow.
+        var status = await SendWithRecoveryAsync(imagePath, bypassDuplicate: true, ct);
         return status.Success;
     }
+
+    public LedBoardRuntimeStatus GetRuntimeStatus() => new(
+        Enabled: _onbonOptions.Enabled,
+        AutoSend: _onbonOptions.AutoSend,
+        LayoutTestMode: _serviceOptions.LayoutTestMode,
+        PollSeconds: _onbonOptions.PollSeconds,
+        Tick: _tick,
+        LastTickAt: _lastTickAt,
+        LastAttemptAt: _lastAttemptAt,
+        LastAttemptImage: _lastAttemptImage,
+        LastSuccessAt: _lastSuccessAt,
+        LastFailureAt: _lastFailureAt,
+        LastFailureErrorType: _lastFailureErrorType,
+        LastFailureDetails: _lastFailureDetails,
+        WatchFolder: _serviceOptions.WatchFolder,
+        LastSentFilePath: _lastSentFilePath,
+        LastSentWriteUtc: _lastSentWriteUtc == default ? null : new DateTimeOffset(_lastSentWriteUtc, TimeSpan.Zero));
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -179,11 +386,13 @@ public sealed class LedBoardService : BackgroundService
     {
         if (!Directory.Exists(folder)) return null;
 
-        return new DirectoryInfo(folder)
+        var files = new DirectoryInfo(folder)
             .EnumerateFiles("*", SearchOption.TopDirectoryOnly)
             .Where(f => f.Extension.ToLowerInvariant() is ".bmp" or ".png" or ".jpg" or ".jpeg")
             .OrderByDescending(f => f.LastWriteTimeUtc)
             .FirstOrDefault();
+
+        return files;
     }
 
     private void Log(LogLevel level, string message)
@@ -192,3 +401,20 @@ public sealed class LedBoardService : BackgroundService
         _logStore.Add(level, nameof(LedBoardService), message);
     }
 }
+
+public sealed record LedBoardRuntimeStatus(
+    bool Enabled,
+    bool AutoSend,
+    bool LayoutTestMode,
+    int PollSeconds,
+    long Tick,
+    DateTimeOffset? LastTickAt,
+    DateTimeOffset? LastAttemptAt,
+    string? LastAttemptImage,
+    DateTimeOffset? LastSuccessAt,
+    DateTimeOffset? LastFailureAt,
+    string? LastFailureErrorType,
+    string? LastFailureDetails,
+    string WatchFolder,
+    string? LastSentFilePath,
+    DateTimeOffset? LastSentWriteUtc);

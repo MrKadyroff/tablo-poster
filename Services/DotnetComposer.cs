@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
@@ -7,6 +8,18 @@ using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+// Disambiguate types that conflict with System.Drawing / System.Windows.Forms
+using Brushes = SixLabors.ImageSharp.Drawing.Processing.Brushes;
+using Color = SixLabors.ImageSharp.Color;
+using Font = SixLabors.Fonts.Font;
+using FontStyle = SixLabors.Fonts.FontStyle;
+using HorizontalAlignment = SixLabors.Fonts.HorizontalAlignment;
+using Image = SixLabors.ImageSharp.Image;
+using Pens = SixLabors.ImageSharp.Drawing.Processing.Pens;
+using Point = SixLabors.ImageSharp.Point;
+using PointF = SixLabors.ImageSharp.PointF;
+using Size = SixLabors.ImageSharp.Size;
+using SystemFonts = SixLabors.Fonts.SystemFonts;
 
 namespace LedImageUpdaterService.Services;
 
@@ -113,6 +126,7 @@ public sealed class DotnetComposer
         int fszCode = gl.FszCode ?? DefaultFszCode;
         int fszValue = gl.FszValue ?? DefaultFszValue;
         int fszArrow = gl.FszArrow ?? DefaultFszArrow;
+        int valueShiftX = gl.ValueShiftX ?? 0;
 
         // Derive dimensions and section geometry from canvas config
         int outW = cfg.Canvas.Width;
@@ -129,6 +143,21 @@ public sealed class DotnetComposer
 
         using var canvas = new Image<Rgba32>(rw, rh, CsBg);
 
+        // New unified multi-column mode (1..3 columns, free logo, per-column headers)
+        if (string.Equals(gl.Mode, "columns", StringComparison.OrdinalIgnoreCase) ||
+            gl.Columns is { Count: > 0 })
+        {
+            var rendered = await RenderColumnsAsync(
+                canvas, gl, ratesCfg, sourceDir, flagsDir, outW, outH, os,
+                rowH, colFlagX, colFlagW, colFlagH,
+                colCodeX, colBuyX, colBuyW, colSellX, colSellW,
+                fszHdr, fszCode, fszValue, fszArrow, ct);
+
+            await SaveJpegWithRetryAsync(rendered, outPath, ct);
+            _logger.LogInformation("Multi-column board composed → {Out}", outPath);
+            return outPath;
+        }
+
         if (string.Equals(gl.Mode, "singleColumn", StringComparison.OrdinalIgnoreCase))
         {
             var rendered = await RenderSingleColumnAsync(
@@ -137,7 +166,7 @@ public sealed class DotnetComposer
                 colCodeX, colBuyX, colBuyW, colSellX, colSellW,
                 fszHdr, fszCode, fszValue, fszArrow, ct);
 
-            await rendered.SaveAsJpegAsync(outPath, new JpegEncoder { Quality = 95 }, ct);
+            await SaveJpegWithRetryAsync(rendered, outPath, ct);
             _logger.LogInformation("Single-column board composed → {Out}", outPath);
             return outPath;
         }
@@ -169,7 +198,8 @@ public sealed class DotnetComposer
                     code, rate, flagsDir, flagFile, os,
                     colFlagX, colFlagW, colFlagH,
                     colCodeX, colBuyX, colBuyW, colSellX, colSellW,
-                    fszCode, fszValue, fszArrow, ct);
+                    fszCode, fszValue, fszArrow, valueShiftX, ct, outW,
+                    gl.FontScaleX ?? 1f, (gl.TextStroke ?? 0) * os);
             }
         }
 
@@ -182,12 +212,335 @@ public sealed class DotnetComposer
             Sampler = KnownResamplers.Lanczos3
         }));
 
-        await canvas.SaveAsJpegAsync(outPath, new JpegEncoder { Quality = 95 }, ct);
+        await SaveJpegWithRetryAsync(canvas, outPath, ct);
         _logger.LogInformation("Grid board composed → {Out}", outPath);
         return outPath;
     }
 
-    private async Task<Image<Rgba32>> RenderSingleColumnAsync(
+    private void PlaceTextStretched(
+    Image<Rgba32> canvas,
+    string text,
+    int x, int y,
+    HorizontalAlignment ha,
+    VerticalAlignment va,
+    Font font,
+    Color color,
+    float scaleX = 1f,
+    float strokePx = 0f,
+    float verticalScale = 1.3f)
+{
+    if (string.IsNullOrWhiteSpace(text)) return;
+
+    var measureOpts = new RichTextOptions(font)
+    {
+        Origin = new PointF(0, 0),
+        HorizontalAlignment = HorizontalAlignment.Left,
+        VerticalAlignment = VerticalAlignment.Top,
+    };
+    var size = TextMeasurer.MeasureSize(text, measureOpts);
+
+    // Generous bottom padding so descenders/overflow are never clipped
+    const int padL = 2, padT = 2, padR = 2, padB = 14;
+    int layerW = (int)(size.Width + padL + padR);
+    int layerH = (int)(size.Height + padT + padB);
+
+    using var textLayer = new Image<Rgba32>(layerW, layerH);
+    var drawOpts = new RichTextOptions(font)
+    {
+        Origin = new PointF(padL, padT),
+        HorizontalAlignment = HorizontalAlignment.Left,
+        VerticalAlignment = VerticalAlignment.Top,
+    };
+    textLayer.Mutate(ctx =>
+    {
+        if (strokePx > 0)
+            ctx.DrawText(new DrawingOptions(), drawOpts, text,
+                Brushes.Solid(Color.Transparent),
+                Pens.Solid(Color.Black, strokePx));
+        ctx.DrawText(drawOpts, text, color);
+    });
+
+    // Scale the whole layer so padding stays proportional and nothing gets clipped
+    int newW = (int)(layerW * scaleX);
+    int newH = (int)(layerH * verticalScale);
+    textLayer.Mutate(ctx => ctx.Resize(new ResizeOptions
+    {
+        Size = new Size(newW, newH),
+        Mode = ResizeMode.Stretch,
+        Sampler = KnownResamplers.Bicubic
+    }));
+
+    // Find where the text visually sits inside the resized layer
+    float pX = (float)newW / layerW;
+    float pY = (float)newH / layerH;
+
+    int drawX = ha switch
+    {
+        HorizontalAlignment.Center => x - (int)((padL + size.Width / 2f) * pX),
+        HorizontalAlignment.Right  => x - (int)((padL + size.Width) * pX),
+        _                          => x - (int)(padL * pX),
+    };
+    int drawY = va switch
+    {
+        VerticalAlignment.Center => y - (int)((padT + size.Height / 2f) * pY),
+        VerticalAlignment.Bottom => y - (int)((padT + size.Height) * pY),
+        _                        => y - (int)(padT * pY),
+    };
+
+    canvas.Mutate(ctx => ctx.DrawImage(textLayer, new Point(drawX, drawY), 1f));
+}
+
+    private async Task SaveJpegWithRetryAsync(Image<Rgba32> image, string outPath, CancellationToken ct)
+    {
+        var dir = Path.GetDirectoryName(outPath) ?? Directory.GetCurrentDirectory();
+        Directory.CreateDirectory(dir);
+
+        // Write to a temp file first, then overwrite target.
+        // This minimizes partially-written outputs and handles short file locks.
+        var tempPath = Path.Combine(dir, $".{Path.GetFileName(outPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await image.SaveAsJpegAsync(tempPath, new JpegEncoder { Quality = 95 }, ct);
+
+            const int maxAttempts = 10;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                try
+                {
+                    File.Copy(tempPath, outPath, overwrite: true);
+                    return;
+                }
+                catch (IOException ioEx) when (attempt < maxAttempts)
+                {
+                    _logger.LogWarning(
+                        "Output file is locked, retry {Attempt}/{Max}: {Path}. Details: {Error}",
+                        attempt, maxAttempts, outPath, ioEx.Message);
+                    await Task.Delay(TimeSpan.FromMilliseconds(150 * attempt), ct);
+                }
+            }
+
+            // Last attempt with explicit error if still locked.
+            File.Copy(tempPath, outPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { /* ignore temp cleanup */ }
+            }
+        }
+    }
+
+    // private async Task<Image<Rgba32>> RenderSingleColumnAsync(
+    //     Image<Rgba32> canvas,
+    //     GridLayout gl,
+    //     RatesConfig ratesCfg,
+    //     string sourceDir,
+    //     string flagsDir,
+    //     int outW,
+    //     int outH,
+    //     int os,
+    //     int rh,
+    //     int headerH,
+    //     int rowH,
+    //     int colFlagX,
+    //     int colFlagW,
+    //     int colFlagH,
+    //     int colCodeX,
+    //     int colBuyX,
+    //     int colBuyW,
+    //     int colSellX,
+    //     int colSellW,
+    //     int fszHdr,
+    //     int fszCode,
+    //     int fszValue,
+    //     int fszArrow,
+    //     CancellationToken ct)
+    // {
+    //     int logoW = gl.LogoW ?? 42;
+    //     int logoX = gl.LogoX ?? (gl.SingleLeftMargin ?? 2);
+    //     int logoY = gl.LogoY ?? 1;
+    //     int logoH = gl.LogoH ?? Math.Max(10, Math.Min(logoW, headerH - 4));
+
+    //     // Backward compatibility:
+    //     // - legacy single-column uses table anchored after logo (singleLeftMargin + logoW + singleHeaderGap)
+    //     // - if any absolute anchor is set, columns are interpreted as absolute X positions
+    //     bool hasAbsoluteAnchors =
+    //         gl.LogoX.HasValue || gl.LogoY.HasValue || gl.LogoH.HasValue ||
+    //         gl.HeaderBuyX.HasValue || gl.HeaderBuyY.HasValue ||
+    //         gl.HeaderSellX.HasValue || gl.HeaderSellY.HasValue ||
+    //         gl.RowsStartY.HasValue;
+
+    //     int legacyTableX = (gl.SingleLeftMargin ?? 2) + logoW + (gl.SingleHeaderGap ?? 6);
+    //     int tableX = hasAbsoluteAnchors ? 0 : legacyTableX;
+
+    //     await TryDrawLogoAsync(canvas, sourceDir, gl.LogoFile ?? "logo.png",
+    //         logoX * os, logoY * os, logoW * os, logoH * os, ct);
+
+    //     int buyHeaderX = gl.HeaderBuyX
+    //         ?? (hasAbsoluteAnchors ? colBuyX + colBuyW / 2 : legacyTableX + colBuyX + colBuyW / 2);
+    //     int buyHeaderY = gl.HeaderBuyY ?? 1;
+
+    //     int sellHeaderX = gl.HeaderSellX
+    //         ?? (hasAbsoluteAnchors ? colSellX + colSellW / 2 : legacyTableX + colSellX + colSellW / 2);
+    //     int sellHeaderY = gl.HeaderSellY ?? buyHeaderY;
+
+    //     int buyCX = buyHeaderX * os;
+    //     int sellCX = sellHeaderX * os;
+    //     var hdrFont = ResolveFont(fszHdr * os, FontStyle.Bold);
+    //     int lineGap = 1;
+    //     int lineStep = fszHdr + lineGap;
+
+    //     // Three-line header as in the reference design: local + RU + EN.
+    //     var buyL0 = ratesCfg.Labels.Buy.ElementAtOrDefault(0) ?? "Сатып аламыз";
+    //     var buyL1 = ratesCfg.Labels.Buy.ElementAtOrDefault(1) ?? "Покупаем";
+    //     var buyL2 = ratesCfg.Labels.Buy.ElementAtOrDefault(2) ?? "We buy";
+    //     var sellL0 = ratesCfg.Labels.Sell.ElementAtOrDefault(0) ?? "Сатамыз";
+    //     var sellL1 = ratesCfg.Labels.Sell.ElementAtOrDefault(1) ?? "Продаем";
+    //     var sellL2 = ratesCfg.Labels.Sell.ElementAtOrDefault(2) ?? "We sell";
+
+    //     PlaceText(canvas, buyL0, buyCX, buyHeaderY * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
+    //     PlaceText(canvas, buyL1, buyCX, (buyHeaderY + lineStep) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
+    //     PlaceText(canvas, buyL2, buyCX, (buyHeaderY + lineStep * 2) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
+    //     PlaceText(canvas, sellL0, sellCX, sellHeaderY * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
+    //     PlaceText(canvas, sellL1, sellCX, (sellHeaderY + lineStep) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
+    //     PlaceText(canvas, sellL2, sellCX, (sellHeaderY + lineStep * 2) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
+
+    //     int rowsStartY = hasAbsoluteAnchors
+    //         ? (gl.RowsStartY ?? (gl.SingleTopOffset ?? (Math.Max(buyHeaderY, sellHeaderY) + lineStep * 3 + 1)))
+    //         : ((gl.SingleTopOffset ?? 0) + headerH);
+    //     int rows = gl.SingleRows ?? 5;
+    //     var codes = gl.Left.Count > 0 ? gl.Left : ["USD", "EUR", "RUB", "CNY", "KGS"];
+
+    //     for (var i = 0; i < codes.Count && i < rows; i++)
+    //     {
+    //         var code = codes[i];
+    //         if (!ratesCfg.Currencies.TryGetValue(code, out var rate))
+    //             continue;
+
+    //         var flagFile = gl.FlagFiles.TryGetValue(code, out var ff)
+    //             ? ff
+    //             : $"{code.ToLower()}.png";
+
+    //         await DrawRowAsync(canvas,
+    //             tableX * os,
+    //             (rowsStartY + i * rowH) * os,
+    //             rowH * os,
+    //             code, rate, flagsDir, flagFile, os,
+    //             colFlagX, colFlagW, colFlagH,
+    //             colCodeX, colBuyX, colBuyW, colSellX, colSellW,
+    //             fszCode, fszValue, fszArrow, gl.ValueShiftX ?? 0, ct);
+    //     }
+
+    //     canvas.Mutate(x => x.Resize(new ResizeOptions
+    //     {
+    //         Size = new Size(outW, outH),
+    //         Mode = ResizeMode.Stretch,
+    //         Sampler = KnownResamplers.Lanczos3
+    //     }));
+
+    //     return canvas;
+    // }
+private async Task<Image<Rgba32>> RenderSingleColumnAsync(
+    Image<Rgba32> canvas,
+    GridLayout gl,
+    RatesConfig ratesCfg,
+    string sourceDir,
+    string flagsDir,
+    int outW,
+    int outH,
+    int os,
+    int rh,
+    int headerH,
+    int rowH,
+    int colFlagX, int colFlagW, int colFlagH,
+    int colCodeX, int colBuyX, int colBuyW, int colSellX, int colSellW,
+    int fszHdr, int fszCode, int fszValue, int fszArrow,
+    CancellationToken ct)
+{
+    int logoW = gl.LogoW ?? 34;
+    int logoX = gl.LogoX ?? 2;
+    int logoY = gl.LogoY ?? 2;
+    int logoH = gl.LogoH ?? 26;
+
+    await TryDrawLogoAsync(canvas, sourceDir, gl.LogoFile ?? "logo.png",
+        logoX * os, logoY * os, logoW * os, logoH * os, ct);
+
+    // Заголовки
+    int buyHeaderX = gl.HeaderBuyX ?? 67;
+    int sellHeaderX = gl.HeaderSellX ?? 104;
+    int buyHeaderY = gl.HeaderBuyY ?? 3;
+    int sellHeaderY = gl.HeaderSellY ?? 3;
+
+    if (outW <= 160)
+    {
+        buyHeaderX = 67;
+        sellHeaderX = 104;
+        fszHdr = Math.Min(fszHdr, 9);
+    }
+
+    var hdrFont = ResolveFont(fszHdr * os, FontStyle.Bold);
+    int lineStep = fszHdr + 1;
+
+    // Трёхстрочный заголовок
+    var buyL0 = ratesCfg.Labels.Buy.ElementAtOrDefault(0) ?? "Сатып аламыз";
+    var buyL1 = ratesCfg.Labels.Buy.ElementAtOrDefault(1) ?? "Покупаем";
+    var buyL2 = ratesCfg.Labels.Buy.ElementAtOrDefault(2) ?? "We buy";
+    var sellL0 = ratesCfg.Labels.Sell.ElementAtOrDefault(0) ?? "Сатамыз";
+    var sellL1 = ratesCfg.Labels.Sell.ElementAtOrDefault(1) ?? "Продаем";
+    var sellL2 = ratesCfg.Labels.Sell.ElementAtOrDefault(2) ?? "We sell";
+
+    int buyCX = buyHeaderX * os;
+    int sellCX = sellHeaderX * os;
+
+    float fontScaleX = gl.FontScaleX ?? 1f;
+    float strokePx = (gl.TextStroke ?? 0) * os;
+
+    PlaceText(canvas, buyL0, buyCX, buyHeaderY * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr, fontScaleX);
+    PlaceText(canvas, buyL1, buyCX, (buyHeaderY + lineStep) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr, fontScaleX);
+    PlaceText(canvas, buyL2, buyCX, (buyHeaderY + lineStep * 2) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr, fontScaleX);
+
+    PlaceText(canvas, sellL0, sellCX, sellHeaderY * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr, fontScaleX);
+    PlaceText(canvas, sellL1, sellCX, (sellHeaderY + lineStep) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr, fontScaleX);
+    PlaceText(canvas, sellL2, sellCX, (sellHeaderY + lineStep * 2) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr, fontScaleX);
+
+    int rowsStartY = gl.RowsStartY ?? 36;
+    int rows = gl.SingleRows ?? 6;
+    var codes = gl.Left;
+
+    for (int i = 0; i < codes.Count && i < rows; i++)
+    {
+        var code = codes[i];
+        if (!ratesCfg.Currencies.TryGetValue(code, out var rate)) continue;
+
+        var flagFile = gl.FlagFiles.TryGetValue(code, out var ff) ? ff : $"{code.ToLower()}.png";
+
+        await DrawRowAsync(canvas, 0, (rowsStartY + i * rowH) * os, rowH * os,
+            code, rate, flagsDir, flagFile, os,
+            colFlagX, colFlagW, colFlagH, colCodeX, colBuyX, colBuyW, colSellX, colSellW,
+            fszCode, fszValue, fszArrow, gl.ValueShiftX ?? -5, ct, outW,
+            fontScaleX, strokePx);
+    }
+
+    canvas.Mutate(x => x.Resize(new ResizeOptions
+    {
+        Size = new Size(outW, outH),
+        Mode = ResizeMode.Stretch,
+        Sampler = KnownResamplers.Lanczos3
+    }));
+
+    return canvas;
+}
+
+    /// <summary>
+    /// Unified multi-column renderer (1..3 columns). The logo is drawn once as a
+    /// free overlay at gl.LogoX/Y/W/H. Each column repeats the same internal row
+    /// geometry (flag/code/buy/sell + headers) at a horizontal offset, and carries
+    /// its own currency list and buy/sell header labels.
+    /// </summary>
+    private async Task<Image<Rgba32>> RenderColumnsAsync(
         Image<Rgba32> canvas,
         GridLayout gl,
         RatesConfig ratesCfg,
@@ -196,96 +549,75 @@ public sealed class DotnetComposer
         int outW,
         int outH,
         int os,
-        int rh,
-        int headerH,
         int rowH,
-        int colFlagX,
-        int colFlagW,
-        int colFlagH,
-        int colCodeX,
-        int colBuyX,
-        int colBuyW,
-        int colSellX,
-        int colSellW,
-        int fszHdr,
-        int fszCode,
-        int fszValue,
-        int fszArrow,
+        int colFlagX, int colFlagW, int colFlagH,
+        int colCodeX, int colBuyX, int colBuyW, int colSellX, int colSellW,
+        int fszHdr, int fszCode, int fszValue, int fszArrow,
         CancellationToken ct)
     {
-        int logoW = gl.LogoW ?? 42;
-        int logoX = gl.LogoX ?? (gl.SingleLeftMargin ?? 2);
-        int logoY = gl.LogoY ?? 1;
-        int logoH = gl.LogoH ?? Math.Max(10, Math.Min(logoW, headerH - 4));
+        // Build the list of columns. Fall back to Left/Right for back-compat.
+        var columns = gl.Columns is { Count: > 0 }
+            ? gl.Columns
+            : new List<ColumnDef>
+            {
+                new() { Codes = gl.Left },
+                new() { Codes = gl.Right },
+            }.Where(c => c.Codes.Count > 0).ToList();
 
-        // Backward compatibility:
-        // - legacy single-column uses table anchored after logo (singleLeftMargin + logoW + singleHeaderGap)
-        // - if any absolute anchor is set, columns are interpreted as absolute X positions
-        bool hasAbsoluteAnchors =
-            gl.LogoX.HasValue || gl.LogoY.HasValue || gl.LogoH.HasValue ||
-            gl.HeaderBuyX.HasValue || gl.HeaderBuyY.HasValue ||
-            gl.HeaderSellX.HasValue || gl.HeaderSellY.HasValue ||
-            gl.RowsStartY.HasValue;
+        if (columns.Count == 0)
+            columns = [new ColumnDef { Codes = gl.Left }];
 
-        int legacyTableX = (gl.SingleLeftMargin ?? 2) + logoW + (gl.SingleHeaderGap ?? 6);
-        int tableX = hasAbsoluteAnchors ? 0 : legacyTableX;
+        int count = Math.Clamp(gl.ColumnCount ?? columns.Count, 1, 3);
+        if (columns.Count > count) columns = columns.Take(count).ToList();
 
+        int pitch = outW / count;   // column width in 1× pixels
+
+        float fontScaleX = gl.FontScaleX ?? 1f;
+        float strokePx = (gl.TextStroke ?? 0) * os;
+
+        // ── logo: free-floating overlay ────────────────────────────────────
+        int logoX = gl.LogoX ?? 2, logoY = gl.LogoY ?? 2;
+        int logoW = gl.LogoW ?? 40, logoH = gl.LogoH ?? 31;
         await TryDrawLogoAsync(canvas, sourceDir, gl.LogoFile ?? "logo.png",
             logoX * os, logoY * os, logoW * os, logoH * os, ct);
 
-        int buyHeaderX = gl.HeaderBuyX
-            ?? (hasAbsoluteAnchors ? colBuyX + colBuyW / 2 : legacyTableX + colBuyX + colBuyW / 2);
-        int buyHeaderY = gl.HeaderBuyY ?? 1;
-
-        int sellHeaderX = gl.HeaderSellX
-            ?? (hasAbsoluteAnchors ? colSellX + colSellW / 2 : legacyTableX + colSellX + colSellW / 2);
-        int sellHeaderY = gl.HeaderSellY ?? buyHeaderY;
-
-        int buyCX = buyHeaderX * os;
-        int sellCX = sellHeaderX * os;
+        // Header geometry (offsets within a column)
+        int buyHeaderX = gl.HeaderBuyX ?? 67;
+        int sellHeaderX = gl.HeaderSellX ?? 104;
+        int buyHeaderY = gl.HeaderBuyY ?? 3;
+        int sellHeaderY = gl.HeaderSellY ?? 3;
         var hdrFont = ResolveFont(fszHdr * os, FontStyle.Bold);
-        int lineGap = 1;
-        int lineStep = fszHdr + lineGap;
+        int lineStep = fszHdr + 1;
 
-        // Three-line header as in the reference design: local + RU + EN.
-        var buyL0 = ratesCfg.Labels.Buy.ElementAtOrDefault(0) ?? "Сатып аламыз";
-        var buyL1 = ratesCfg.Labels.Buy.ElementAtOrDefault(1) ?? "Покупаем";
-        var buyL2 = ratesCfg.Labels.Buy.ElementAtOrDefault(2) ?? "We buy";
-        var sellL0 = ratesCfg.Labels.Sell.ElementAtOrDefault(0) ?? "Сатамыз";
-        var sellL1 = ratesCfg.Labels.Sell.ElementAtOrDefault(1) ?? "Продаем";
-        var sellL2 = ratesCfg.Labels.Sell.ElementAtOrDefault(2) ?? "We sell";
+        int rowsStartY = gl.RowsStartY ?? 36;
+        int maxRows = gl.SingleRows ?? 6;
 
-        PlaceText(canvas, buyL0, buyCX, buyHeaderY * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
-        PlaceText(canvas, buyL1, buyCX, (buyHeaderY + lineStep) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
-        PlaceText(canvas, buyL2, buyCX, (buyHeaderY + lineStep * 2) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
-        PlaceText(canvas, sellL0, sellCX, sellHeaderY * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
-        PlaceText(canvas, sellL1, sellCX, (sellHeaderY + lineStep) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
-        PlaceText(canvas, sellL2, sellCX, (sellHeaderY + lineStep * 2) * os, HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr);
-
-        int rowsStartY = hasAbsoluteAnchors
-            ? (gl.RowsStartY ?? (gl.SingleTopOffset ?? (Math.Max(buyHeaderY, sellHeaderY) + lineStep * 3 + 1)))
-            : ((gl.SingleTopOffset ?? 0) + headerH);
-        int rows = gl.SingleRows ?? 5;
-        var codes = gl.Left.Count > 0 ? gl.Left : ["USD", "EUR", "RUB", "CNY", "KGS"];
-
-        for (var i = 0; i < codes.Count && i < rows; i++)
+        for (int c = 0; c < columns.Count; c++)
         {
-            var code = codes[i];
-            if (!ratesCfg.Currencies.TryGetValue(code, out var rate))
-                continue;
+            var col = columns[c];
+            // Per-column absolute X wins; otherwise auto-place evenly across the canvas.
+            int xOff = col.X ?? (c * pitch);
 
-            var flagFile = gl.FlagFiles.TryGetValue(code, out var ff)
-                ? ff
-                : $"{code.ToLower()}.png";
+            // Per-column header labels (fall back to shared rates.json labels)
+            var buy = col.Buy is { Count: > 0 } ? col.Buy : ratesCfg.Labels.Buy;
+            var sell = col.Sell is { Count: > 0 } ? col.Sell : ratesCfg.Labels.Sell;
 
-            await DrawRowAsync(canvas,
-                tableX * os,
-                (rowsStartY + i * rowH) * os,
-                rowH * os,
-                code, rate, flagsDir, flagFile, os,
-                colFlagX, colFlagW, colFlagH,
-                colCodeX, colBuyX, colBuyW, colSellX, colSellW,
-                fszCode, fszValue, fszArrow, ct);
+            DrawColumnHeader(canvas, buy, sell, (xOff + buyHeaderX) * os, (xOff + sellHeaderX) * os,
+                buyHeaderY, sellHeaderY, lineStep, os, hdrFont, fontScaleX);
+
+            for (int i = 0; i < col.Codes.Count && i < maxRows; i++)
+            {
+                var code = col.Codes[i];
+                if (!ratesCfg.Currencies.TryGetValue(code, out var rate)) continue;
+
+                var flagFile = gl.FlagFiles.TryGetValue(code, out var ff) ? ff : $"{code.ToLower()}.png";
+
+                await DrawRowAsync(canvas, xOff * os, (rowsStartY + i * rowH) * os, rowH * os,
+                    code, rate, flagsDir, flagFile, os,
+                    colFlagX, colFlagW, colFlagH, colCodeX, colBuyX, colBuyW, colSellX, colSellW,
+                    fszCode, fszValue, fszArrow, gl.ValueShiftX ?? -5, ct, outW,
+                    fontScaleX, strokePx);
+            }
         }
 
         canvas.Mutate(x => x.Resize(new ResizeOptions
@@ -298,6 +630,25 @@ public sealed class DotnetComposer
         return canvas;
     }
 
+    /// <summary>Draws a 3-line buy/sell header pair for one column.</summary>
+    private void DrawColumnHeader(
+        Image<Rgba32> canvas, List<string> buy, List<string> sell,
+        int buyCX, int sellCX, int buyHeaderY, int sellHeaderY,
+        int lineStep, int os, Font hdrFont, float fontScaleX)
+    {
+        for (int line = 0; line < 3; line++)
+        {
+            var bt = buy.ElementAtOrDefault(line);
+            if (!string.IsNullOrWhiteSpace(bt))
+                PlaceText(canvas, bt, buyCX, (buyHeaderY + lineStep * line) * os,
+                    HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr, fontScaleX);
+
+            var st = sell.ElementAtOrDefault(line);
+            if (!string.IsNullOrWhiteSpace(st))
+                PlaceText(canvas, st, sellCX, (sellHeaderY + lineStep * line) * os,
+                    HorizontalAlignment.Center, VerticalAlignment.Top, hdrFont, CsHdr, fontScaleX);
+        }
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     // ─── Breakpoint resolution ────────────────────────────────────────────────
@@ -334,6 +685,8 @@ public sealed class DotnetComposer
             LogoFile = ov.LogoFile ?? @base.LogoFile,
             Left = ov.Left.Count > 0 ? ov.Left : @base.Left,
             Right = ov.Right.Count > 0 ? ov.Right : @base.Right,
+            Columns = ov.Columns is { Count: > 0 } ? ov.Columns : @base.Columns,
+            ColumnCount = ov.ColumnCount ?? @base.ColumnCount,
             FlagFiles = ov.FlagFiles.Count > 0 ? ov.FlagFiles : @base.FlagFiles,
             SingleRows = ov.SingleRows ?? @base.SingleRows,
             SingleLeftMargin = ov.SingleLeftMargin ?? @base.SingleLeftMargin,
@@ -362,6 +715,9 @@ public sealed class DotnetComposer
             FszCode = ov.FszCode ?? @base.FszCode,
             FszValue = ov.FszValue ?? @base.FszValue,
             FszArrow = ov.FszArrow ?? @base.FszArrow,
+            ValueShiftX = ov.ValueShiftX ?? @base.ValueShiftX,
+            FontScaleX = ov.FontScaleX ?? @base.FontScaleX,
+            TextStroke = ov.TextStroke ?? @base.TextStroke,
         };
     }
 
@@ -399,66 +755,146 @@ public sealed class DotnetComposer
         PlaceText(canvas, sellL2, sellCX, line2Y, HorizontalAlignment.Center, VerticalAlignment.Top, f, CsHdr);
     }
 
+    // private async Task DrawRowAsync(
+    //     Image<Rgba32> canvas,
+    //     int sectXPx,
+    //     int rowTopPx,
+    //     int rowHPx,
+    //     string code,
+    //     CurrencyRate rate,
+    //     string flagsDir,
+    //     string flagFile,
+    //     int os,
+    //     int colFlagX, int colFlagW, int colFlagH,
+    //     int colCodeX, int colBuyX, int colBuyW, int colSellX, int colSellW,
+    //     int fszCode, int fszValue, int fszArrow, int valueShiftX,
+    //     CancellationToken ct)
+    // {
+    //     // ── flag ──────────────────────────────────────────────────────────
+    //     int fw = colFlagW * os, fh = colFlagH * os;
+    //     int fx = sectXPx + colFlagX * os;
+    //     int fy = rowTopPx + (rowHPx - fh) / 2;
+
+    //     try
+    //     {
+    //         using var flag = await LoadImageAsync(flagsDir, flagFile, fw, fh, ct);
+    //         canvas.Mutate(x => x.DrawImage(flag, new Point(fx, fy), 1f));
+    //     }
+    //     catch (Exception ex)
+    //     {
+    //         _logger.LogDebug("Flag load failed ({F}): {E}. Trying fallback usd.png", flagFile, ex.Message);
+    //         try
+    //         {
+    //             using var fallbackFlag = await LoadImageAsync(flagsDir, "usd.png", fw, fh, ct);
+    //             canvas.Mutate(x => x.DrawImage(fallbackFlag, new Point(fx, fy), 1f));
+    //         }
+    //         catch (Exception fallbackEx)
+    //         {
+    //             _logger.LogDebug("Flag fallback skip (usd.png): {E}", fallbackEx.Message);
+    //         }
+    //     }
+
+    //     int midY = rowTopPx + rowHPx / 2;
+
+    //     // ── currency code ─────────────────────────────────────────────────
+    //     PlaceText(canvas, code,
+    //         sectXPx + colCodeX * os, midY,
+    //         HorizontalAlignment.Left, VerticalAlignment.Center,
+    //         ResolveFont(fszCode * os, FontStyle.Bold), CsCode);
+
+    //     // ── buy value ────────────────────────────────────────────────────────────────
+    //     PlaceText(canvas, FmtRate(rate.Buy),
+    //         sectXPx + (colBuyX + colBuyW / 2 + valueShiftX) * os, midY,
+    //         HorizontalAlignment.Center, VerticalAlignment.Center,
+    //         ResolveFont(fszValue * os, FontStyle.Bold), CsBuy);
+    //     DrawArrow(canvas, sectXPx + (colBuyX + colBuyW - 5) * os, midY,
+    //         Direction(rate.PrevBuy, rate.Buy), isBuy: true, os, fszArrow);
+
+    //     // ── sell value ───────────────────────────────────────────────────────────────
+    //     PlaceText(canvas, FmtRate(rate.Sell),
+    //         sectXPx + (colSellX + colSellW / 2 + valueShiftX) * os, midY,
+    //         HorizontalAlignment.Center, VerticalAlignment.Center,
+    //         ResolveFont(fszValue * os, FontStyle.Bold), CsSell);
+    //     DrawArrow(canvas, sectXPx + (colSellX + colSellW - 5) * os, midY,
+    //         Direction(rate.PrevSell, rate.Sell), isBuy: false, os, fszArrow);
+    // }
+
     private async Task DrawRowAsync(
-        Image<Rgba32> canvas,
-        int sectXPx,
-        int rowTopPx,
-        int rowHPx,
-        string code,
-        CurrencyRate rate,
-        string flagsDir,
-        string flagFile,
-        int os,
-        int colFlagX, int colFlagW, int colFlagH,
-        int colCodeX, int colBuyX, int colBuyW, int colSellX, int colSellW,
-        int fszCode, int fszValue, int fszArrow,
-        CancellationToken ct)
+    Image<Rgba32> canvas,
+    int sectXPx,
+    int rowTopPx,
+    int rowHPx,
+    string code,
+    CurrencyRate rate,
+    string flagsDir,
+    string flagFile,
+    int os,
+    int colFlagX, int colFlagW, int colFlagH,
+    int colCodeX, int colBuyX, int colBuyW, int colSellX, int colSellW,
+    int fszCode, int fszValue, int fszArrow, int valueShiftX,
+    CancellationToken ct,
+    int outW,
+    float fontScaleX = 1f,
+    float strokePx = 0f)
+{
+    int midY = rowTopPx + rowHPx / 2;
+
+    // Flag
+    int fx = sectXPx + colFlagX * os;
+    int fy = rowTopPx + (rowHPx - colFlagH * os) / 2;
+    try
     {
-        // ── flag ──────────────────────────────────────────────────────────
-        int fw = colFlagW * os, fh = colFlagH * os;
-        int fx = sectXPx + colFlagX * os;
-        int fy = rowTopPx + (rowHPx - fh) / 2;
-
-        try
-        {
-            using var flag = await LoadImageAsync(flagsDir, flagFile, fw, fh, ct);
-            canvas.Mutate(x => x.DrawImage(flag, new Point(fx, fy), 1f));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug("Flag skip ({F}): {E}", flagFile, ex.Message);
-        }
-
-        int midY = rowTopPx + rowHPx / 2;
-
-        // ── currency code ─────────────────────────────────────────────────
-        PlaceText(canvas, code,
-            sectXPx + colCodeX * os, midY,
-            HorizontalAlignment.Left, VerticalAlignment.Center,
-            ResolveFont(fszCode * os, FontStyle.Bold), CsCode);
-
-        // ── buy value ────────────────────────────────────────────────────────────────
-        PlaceText(canvas, FmtRate(rate.Buy),
-            sectXPx + (colBuyX + colBuyW / 2) * os, midY,
-            HorizontalAlignment.Center, VerticalAlignment.Center,
-            ResolveFont(fszValue * os, FontStyle.Bold), CsBuy);
-        DrawArrow(canvas, sectXPx + (colBuyX + colBuyW - 5) * os, midY,
-            Direction(rate.PrevBuy, rate.Buy), isBuy: true, os, fszArrow);
-
-        // ── sell value ───────────────────────────────────────────────────────────────
-        PlaceText(canvas, FmtRate(rate.Sell),
-            sectXPx + (colSellX + colSellW / 2) * os, midY,
-            HorizontalAlignment.Center, VerticalAlignment.Center,
-            ResolveFont(fszValue * os, FontStyle.Bold), CsSell);
-        DrawArrow(canvas, sectXPx + (colSellX + colSellW - 5) * os, midY,
-            Direction(rate.PrevSell, rate.Sell), isBuy: false, os, fszArrow);
+        using var flag = await LoadImageAsync(flagsDir, flagFile, colFlagW * os, colFlagH * os, ct);
+        canvas.Mutate(x => x.DrawImage(flag, new Point(fx, fy), 1f));
     }
+    catch { /* fallback if needed */ }
+
+    // Code
+    PlaceTextStretched(canvas, code,
+        sectXPx + colCodeX * os, midY,
+        HorizontalAlignment.Left, VerticalAlignment.Center,
+        ResolveFont(fszCode * os, FontStyle.Bold), CsCode,
+        fontScaleX, strokePx,verticalScale: 1.3f);
+
+    // 3-decimal currencies (UZS, VND) print a longer number, so shrink this row's
+    // value font by a couple pixels to keep it inside the column.
+    int valueFsz = ThreeDecimalCurrencies.Contains(code) ? Math.Max(1, fszValue - 2) : fszValue;
+
+    var valueFont = ResolveFont(valueFsz * os, FontStyle.Bold);
+
+    // Авто-уменьшение шрифта для узких табло
+    if (outW <= 160)
+    {
+        var testFont = ResolveFont((int)(valueFsz * 0.93 * os), FontStyle.Bold);
+        var buySize = TextMeasurer.MeasureSize(FmtRate(rate.Buy, code), new RichTextOptions(testFont));
+        if (buySize.Width * fontScaleX / os > colBuyW - 6)
+            valueFont = testFont;
+    }
+
+    // Buy
+    PlaceTextStretched(canvas, FmtRate(rate.Buy, code),
+        sectXPx + (colBuyX + colBuyW / 2 + valueShiftX) * os, midY,
+        HorizontalAlignment.Center, VerticalAlignment.Center, valueFont, CsBuy,
+        fontScaleX, strokePx, verticalScale: 1.3f);
+
+    DrawArrow(canvas, sectXPx + (colBuyX + colBuyW - 4) * os, midY,
+        Direction(rate.PrevBuy, rate.Buy), true, os, fszArrow, fontScaleX);
+
+    // Sell
+    PlaceTextStretched(canvas, FmtRate(rate.Sell, code),
+        sectXPx + (colSellX + colSellW / 2 + valueShiftX) * os, midY,
+        HorizontalAlignment.Center, VerticalAlignment.Center, valueFont, CsSell,
+        fontScaleX, strokePx, verticalScale: 1.3f);
+
+    DrawArrow(canvas, sectXPx + (colSellX + colSellW - 4) * os, midY,
+        Direction(rate.PrevSell, rate.Sell), false, os, fszArrow, fontScaleX);
+}
 
     private static int Direction(decimal prev, decimal current) =>
         prev <= 0 || prev == current ? 0 : current > prev ? 1 : -1;
 
     private void DrawArrow(
-        Image<Rgba32> canvas, int x, int y, int dir, bool isBuy, int os, int fszArrow)
+        Image<Rgba32> canvas, int x, int y, int dir, bool isBuy, int os, int fszArrow, float scaleX = 1f)
     {
         if (dir == 0) return;
         bool up = dir > 0;
@@ -469,7 +905,7 @@ public sealed class DotnetComposer
             : (up ? CsArrowGreen : CsArrowRed);
         PlaceText(canvas, up ? "\u25b2" : "\u25bc",
             x, y, HorizontalAlignment.Right, VerticalAlignment.Center,
-            ResolveFont(fszArrow * os), color);
+            ResolveFont(fszArrow * os), color, scaleX);
     }
 
     private static void PlaceText(
@@ -479,17 +915,30 @@ public sealed class DotnetComposer
         HorizontalAlignment ha,
         VerticalAlignment va,
         Font font,
-        Color color)
+        Color color,
+        float scaleX = 1f,
+        float strokePx = 0f)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
-        canvas.Mutate(ctx => ctx.DrawText(
-            new RichTextOptions(font)
-            {
-                Origin = new PointF(x, y),
-                HorizontalAlignment = ha,
-                VerticalAlignment = va,
-            },
-            text, color));
+        var textOpts = new RichTextOptions(font)
+        {
+            Origin = new PointF(x, y),
+            HorizontalAlignment = ha,
+            VerticalAlignment = va,
+        };
+        var drawOpts = scaleX != 1f
+            ? new DrawingOptions { Transform = Matrix3x2.CreateScale(scaleX, 1f, new Vector2(x, y)) }
+            : new DrawingOptions();
+        canvas.Mutate(ctx =>
+        {
+            if (strokePx > 0)
+                ctx.DrawText(drawOpts, textOpts, text,
+                    Brushes.Solid(Color.Transparent),
+                    Pens.Solid(Color.Black, strokePx));
+            ctx.DrawText(drawOpts, textOpts, text,
+                Brushes.Solid(color),
+                Pens.Solid(Color.Transparent, 0.01f));
+        });
     }
 
     private async Task TryDrawLogoAsync(
@@ -511,8 +960,18 @@ public sealed class DotnetComposer
 
     // ─── helpers ──────────────────────────────────────────────────────────────
 
-    private static string FmtRate(decimal v) =>
-        v.ToString(v == decimal.Floor(v) ? "0" : "0.##", CultureInfo.InvariantCulture);
+    // Currencies whose per-unit value is tiny (e.g. UZS, VND) are shown with 3 decimals
+    // so the rate stays readable.
+    private static readonly HashSet<string> ThreeDecimalCurrencies =
+        new(StringComparer.OrdinalIgnoreCase) { "UZS", "VND" };
+
+    private static string FmtRate(decimal v, string code)
+    {
+        if (ThreeDecimalCurrencies.Contains(code))
+            return v.ToString("0.000", CultureInfo.InvariantCulture);
+
+        return v.ToString(v == decimal.Floor(v) ? "0" : "0.##", CultureInfo.InvariantCulture);
+    }
 
     private static Font ResolveFont(int size, FontStyle style = FontStyle.Regular)
     {
@@ -653,6 +1112,11 @@ public sealed class DotnetComposer
         public Dictionary<string, string> FlagFiles { get; init; } =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // Multi-column mode (mode = "columns"): up to 3 independent columns,
+        // each with its own currency list and buy/sell header labels.
+        public List<ColumnDef>? Columns { get; init; }
+        public int? ColumnCount { get; init; }
+
         // Single-column mode settings (mode = "singleColumn")
         public int? SingleRows { get; init; }
         public int? SingleLeftMargin { get; init; }
@@ -695,6 +1159,29 @@ public sealed class DotnetComposer
         public int? FszCode { get; init; }
         public int? FszValue { get; init; }
         public int? FszArrow { get; init; }
+
+        // Horizontal shift for BUY/SELL numeric values in pixels.
+        // Negative shifts left, positive shifts right.
+        public int? ValueShiftX { get; init; }
+
+        /// <summary>Horizontal scale factor for text rendering (e.g. 0.91 = 9% narrower). Default: 1.0</summary>
+        public float? FontScaleX { get; init; }
+        /// <summary>Outline stroke width for value/code text in output pixels. 0 = no stroke.</summary>
+        public int? TextStroke { get; init; }
+    }
+
+    private sealed class ColumnDef
+    {
+        public List<string> Codes { get; init; } = [];
+        public List<string>? Buy { get; init; }
+        public List<string>? Sell { get; init; }
+
+        /// <summary>
+        /// Optional absolute X offset of this column in 1× pixels. When null the column
+        /// is auto-placed at index × (canvasWidth / columnCount). Set per column to lay
+        /// columns out freely — e.g. a centred logo with rates on both sides on a wide board.
+        /// </summary>
+        public int? X { get; init; }
     }
 
     private sealed class RatesConfig

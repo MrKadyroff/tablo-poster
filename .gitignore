@@ -22,3 +22,15 @@ Desktop.ini
 # Temp/log files
 *.tmp
 *.log
+
+# Release archives
+*.zip
+
+# Publish / deploy bundles (self-contained build output: 188 MB exe each)
+/publish/
+/publish-win/
+/tabloEcash/
+/LedImageUpdater-deploy/
+
+
+

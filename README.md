@@ -339,6 +339,41 @@ dotnet run --project LedImageUpdaterService/LedImageUpdaterService.csproj
 - `PublishMode = WifiRelay`
 - `RelayOutRoot` обязателен.
 
+## 13.1 Боевой профиль (aport2, "запустил и работает")
+
+Минимум для прод-старта:
+
+1. В `appsettings.json`:
+- `ActivePointId = "aport2"`
+- `LedUpdater.RunMode = "RenderOnly"`
+- `LedUpdater.LayoutTestMode = false`
+- `OnbonLed.AutoSend = true`
+- `OnbonLed.PollSeconds = 10`
+- `LedUpdater.WatchFolder = "content/points/aport2/output"`
+
+2. В `config/points/aport2.json`:
+- `OnbonLed.ControllerIp = "192.168.22.2"`
+- `OnbonLed.ControllerPort = 80`
+- `OnbonLed.ScreenWidth = 128`
+- `OnbonLed.ScreenHeight = 256`
+- `LedUpdater.ComposeConfigPath = "layout/points/aport2.compose.json"`
+- `LedUpdater.RatesJsonPath = "content/points/aport2/rates.json"`
+
+3. Проверить файлы:
+- `layout/points/aport2.compose.json`
+- `layout/points/index.json` (должен быть `depCode: "АПОРТ2"`)
+- `content/common/flags/*` (все нужные флаги)
+
+4. Запуск:
+- `dotnet build -c Release`
+- `dotnet run`
+
+5. Проверка после старта:
+- в логе есть `rates.json обновлён`
+- в логе есть `composed` для `final.jpg`
+- в логе есть `Image sent successfully`
+- API диагностики: `/api/led/connection`, `/api/led/timer-status`, `/api/led/diagnostics`
+
 ## 14. Команды эксплуатации
 
 Сборка:
