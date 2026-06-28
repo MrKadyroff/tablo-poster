@@ -1001,8 +1001,8 @@ internal sealed class SettingsForm : Form
 
         // Onbon fields
         _lblIp = AddRow(layout, "IP-адрес контроллера:", _txtIp);
-        AddRow(layout, "Wi-Fi SSID табло:", _txtWifiSsid);
         _lblCtrlPort = AddRow(layout, "Порт контроллера:", _numCtrlPort);
+         AddRow(layout, "Wi-Fi SSID табло:", _txtWifiSsid);
         _lblModel = AddRow(layout, "Модель контроллера:", _cmbModel);
         _lblDevice = AddRow(layout, "Код устройства:", _numDevice);
         _lblConnMode = AddRow(layout, "Тип подключения:", _cmbConnMode);
