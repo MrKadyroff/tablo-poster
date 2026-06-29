@@ -1000,7 +1000,7 @@ internal sealed class SettingsForm : Form
         AddRow(layout, "Семейство (подключение):", _cmbFamily);
 
         // Onbon fields
-        _lblIp = AddRow(layout, "IP-адрес контроллера:", _txtIp);
+        _lblIp = AddRow(layout, "IP-адрес контроллера: ", _txtIp);
         _lblCtrlPort = AddRow(layout, "Порт контроллера:", _numCtrlPort);
          AddRow(layout, "Wi-Fi SSID табло:", _txtWifiSsid);
         _lblModel = AddRow(layout, "Модель контроллера:", _cmbModel);
