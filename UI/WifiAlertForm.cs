@@ -3,177 +3,119 @@ using System.Media;
 namespace LedImageUpdaterService.UI;
 
 /// <summary>
-/// Loud, standalone, always-on-top red alert shown when the PC is not connected to the
-/// board's Wi-Fi network. It is intentionally hard to dismiss: there is no close button
-/// and it cannot be closed until the PC joins the correct network. It also re-checks the
-/// connection on its own every few seconds and closes automatically once connected — the
-/// "Проверить снова" button just forces an immediate check.
+/// Compact, always-on-top notice shown in the bottom-right corner after a failed push to the
+/// board when the PC is not on the board's Wi-Fi network. Unlike before, the operator CAN
+/// close it; the tray watchdog (<see cref="WifiWatchdog"/>) re-shows it ~2 minutes later if the
+/// problem is still not resolved. The window also re-checks the connection on its own and
+/// closes automatically once the PC rejoins the correct network.
 ///
-/// This window is owned by the tray app (not the cashier window), so it appears even when
-/// the cashier window is closed.
+/// This window is owned by the tray app (not the cashier window), so it appears even when the
+/// cashier window is closed.
 /// </summary>
 internal sealed class WifiAlertForm : Form
 {
     private readonly string _expectedSsid;
-    private Label _lblCurrent = null!;
     private readonly System.Windows.Forms.Timer _autoTimer = new() { Interval = 4000 };
     private bool _connected;
     private bool _checking;
 
-    private static readonly Color AlertRed = Color.FromArgb(176, 0, 32);
+    /// <summary>
+    /// True when the window closed because the PC rejoined the correct network. The watchdog
+    /// uses this to decide whether to schedule a re-show (it does not, when resolved).
+    /// </summary>
+    internal bool ResolvedConnected => _connected;
+
+    private static readonly Color WarnColor = Color.FromArgb(235, 110, 90);
 
     public WifiAlertForm(string expectedSsid, string? currentSsid)
     {
         _expectedSsid = expectedSsid;
-        InitializeComponent(currentSsid);
+        InitializeComponent();
 
         _autoTimer.Tick += async (_, _) => await RecheckAsync();
         Load += (_, _) =>
         {
+            PositionBottomRight();
             _autoTimer.Start();
             try { SystemSounds.Exclamation.Play(); } catch { }
         };
-        FormClosing += (_, e) =>
-        {
-            // Block closing until the PC is on the correct network.
-            if (!_connected) { e.Cancel = true; }
-            else _autoTimer.Stop();
-        };
+        FormClosing += (_, _) => _autoTimer.Stop();
     }
 
-    private void InitializeComponent(string? currentSsid)
+    private void InitializeComponent()
     {
         SuspendLayout();
 
         Text = "Нет связи с табло";
-        Size = new Size(540, 340);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        StartPosition = FormStartPosition.CenterScreen;
-        ControlBox = false;          // no X / system menu → cannot be closed manually
-        MaximizeBox = false;
-        MinimizeBox = false;
-        ShowInTaskbar = true;
+        Size = new Size(330, 144);
+        FormBorderStyle = FormBorderStyle.FixedToolWindow; // small title bar, has a close button
+        StartPosition = FormStartPosition.Manual;
+        ShowInTaskbar = false;
         TopMost = true;
-        BackColor = AlertRed;
-        ForeColor = Color.White;
-        Font = new Font("Segoe UI", 10f);
+        BackColor = UITheme.Bg;
+        ForeColor = UITheme.Text;
+        Font = new Font("Segoe UI", 9.5f);
         try { Icon = TrayApplicationContext.CreateAppIcon(); } catch { }
-
-        var icon = new Label
-        {
-            Text = "⚠",
-            Font = new Font("Segoe UI", 44f, FontStyle.Bold),
-            ForeColor = Color.White,
-            AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Dock = DockStyle.Top,
-            Height = 78,
-            BackColor = Color.Transparent,
-        };
 
         var title = new Label
         {
-            Text = "WI-FI ТАБЛО НЕ ПОДКЛЮЧЁН",
-            Font = new Font("Segoe UI", 15f, FontStyle.Bold),
-            ForeColor = Color.White,
+            Text = "Курсы на табло не обновляются",
+            Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
+            ForeColor = WarnColor,
             AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Top,
-            Height = 36,
-            BackColor = Color.Transparent,
+            Height = 42,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(14, 0, 10, 0),
         };
 
         var body = new Label
         {
-            Text = "Курсы не доходят до экрана!\nПодключите этот компьютер к сети Wi-Fi табло:",
-            Font = new Font("Segoe UI", 10.5f),
-            ForeColor = Color.White,
+            Text = "Подключитесь к сети Wi-Fi:",
+            ForeColor = UITheme.Text,
             AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Top,
-            Height = 50,
-            BackColor = Color.Transparent,
+            Height = 26,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(14, 0, 10, 0),
         };
 
         var ssid = new Label
         {
             Text = _expectedSsid,
-            Font = new Font("Segoe UI", 17f, FontStyle.Bold),
-            ForeColor = Color.White,
+            Font = new Font("Segoe UI Semibold", 13f, FontStyle.Bold),
+            ForeColor = UITheme.Accent,
             AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Top,
-            Height = 40,
-            BackColor = Color.FromArgb(140, 0, 24),
+            Height = 34,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(14, 0, 10, 0),
         };
 
-        _lblCurrent = new Label
-        {
-            Text = CurrentText(currentSsid),
-            Font = new Font("Segoe UI", 9.5f),
-            ForeColor = Color.FromArgb(255, 220, 220),
-            AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Dock = DockStyle.Top,
-            Height = 26,
-            BackColor = Color.Transparent,
-        };
-
-        var hint = new Label
-        {
-            Text = "Окно закроется автоматически после подключения.",
-            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-            ForeColor = Color.FromArgb(255, 210, 210),
-            AutoSize = false,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Dock = DockStyle.Top,
-            Height = 22,
-            BackColor = Color.Transparent,
-        };
-
-        var buttons = new Panel { Dock = DockStyle.Bottom, Height = 58, BackColor = Color.Transparent };
-        var btnRecheck = new RoundedButton
-        {
-            Text = "🔄  Проверить снова",
-            BackColor = Color.White,
-            ForeColor = AlertRed,
-            Font = new Font("Segoe UI Semibold", 11f),
-            Size = new Size(240, 40),
-            CornerRadius = 9,
-        };
-        btnRecheck.Click += async (_, _) => await RecheckAsync();
-        buttons.Controls.Add(btnRecheck);
-        buttons.Resize += (_, _) =>
-            btnRecheck.Location = new Point((buttons.ClientSize.Width - btnRecheck.Width) / 2, 9);
-
-        // Add in reverse so Dock(Top) stacks in the intended visual order.
-        Controls.Add(buttons);
-        Controls.Add(hint);
-        Controls.Add(_lblCurrent);
+        // Dock(Top) stacks last-added on top → title, then body, then ssid.
         Controls.Add(ssid);
         Controls.Add(body);
         Controls.Add(title);
-        Controls.Add(icon);
 
         ResumeLayout();
     }
 
+    private void PositionBottomRight()
+    {
+        var wa = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
+        Location = new Point(wa.Right - Width - 12, wa.Bottom - Height - 12);
+    }
+
     /// <summary>
-    /// Closes the alert programmatically. The window normally refuses to close until the
-    /// PC is back on the correct network; this is used by the watchdog when the board
-    /// becomes reachable again (delivery succeeded) so the alert never lingers.
+    /// Closes the alert programmatically (used by the watchdog when the board becomes
+    /// reachable again, so the notice never lingers).
     /// </summary>
     public void ForceClose()
     {
-        _connected = true; // allow FormClosing to proceed
+        _connected = true; // marks the close as "resolved" → no re-show
         _autoTimer.Stop();
         try { Close(); } catch { /* ignore if already disposing */ }
     }
-
-    private static string CurrentText(string? currentSsid) =>
-        string.IsNullOrWhiteSpace(currentSsid)
-            ? "Сейчас Wi-Fi не подключён."
-            : $"Сейчас подключено: {currentSsid}";
 
     private async Task RecheckAsync()
     {
@@ -184,11 +126,9 @@ internal sealed class WifiAlertForm : Form
             var current = await WifiInfo.GetConnectedSsidAsync();
             if (!WifiInfo.IsWrongNetwork(_expectedSsid, current))
             {
-                _connected = true;     // allow FormClosing to proceed
+                _connected = true; // resolved → close and do not re-show
                 Close();
-                return;
             }
-            _lblCurrent.Text = CurrentText(current);
         }
         finally
         {

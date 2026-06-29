@@ -35,6 +35,10 @@ else
         return;
     }
 
+    // Global safety net: log unhandled exceptions and keep the UI alive instead of
+    // letting Windows kill the app with the default crash dialog.
+    CrashLogger.Install();
+
     Application.EnableVisualStyles();
     Application.SetCompatibleTextRenderingDefault(false);
     Application.Run(new TrayApplicationContext(args));
