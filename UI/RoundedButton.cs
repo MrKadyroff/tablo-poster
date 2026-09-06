@@ -12,7 +12,7 @@ internal sealed class RoundedButton : Button
     private bool _hover;
     private bool _down;
 
-    public int CornerRadius { get; set; } = 9;
+    public int CornerRadius { get; set; } = 10;
     public Color BorderColorCustom { get; set; } = Color.Empty;
 
     public RoundedButton()
@@ -22,9 +22,9 @@ internal sealed class RoundedButton : Button
         FlatAppearance.MouseOverBackColor = Color.Transparent;
         FlatAppearance.MouseDownBackColor = Color.Transparent;
         SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.OptimizedDoubleBuffer
-               | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+               | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         Cursor = Cursors.Hand;
-        BackColor = Color.FromArgb(31, 111, 235);
+        BackColor = Color.FromArgb(59, 130, 246);
         ForeColor = Color.White;
     }
 
@@ -65,9 +65,9 @@ internal sealed class RoundedButton : Button
         // Blend the rounded corners into the parent background
         g.Clear(Parent?.BackColor ?? BackColor);
 
-        var fill = !Enabled ? Darken(BackColor, 0.25)
-                 : _down ? Darken(BackColor, 0.12)
-                 : _hover ? Lighten(BackColor, 0.14)
+        var fill = !Enabled ? Darken(BackColor, 0.35)
+                 : _down ? Darken(BackColor, 0.14)
+                 : _hover ? Lighten(BackColor, 0.12)
                  : BackColor;
 
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
@@ -76,12 +76,12 @@ internal sealed class RoundedButton : Button
         using (var brush = new SolidBrush(fill))
             g.FillPath(brush, path);
 
-        var border = BorderColorCustom != Color.Empty ? BorderColorCustom : Lighten(BackColor, 0.22);
+        var border = BorderColorCustom != Color.Empty ? BorderColorCustom : Lighten(fill, 0.18);
         using (var pen = new Pen(border, 1f))
             g.DrawPath(pen, path);
 
         TextRenderer.DrawText(g, Text, Font, rect,
-            Enabled ? ForeColor : Lighten(ForeColor, -0.0),
+            Enabled ? ForeColor : Darken(ForeColor, 0.35),
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 }

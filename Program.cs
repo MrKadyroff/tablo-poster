@@ -99,6 +99,7 @@ internal static partial class Program
         builder.Services.AddHttpClient();
         builder.Services.AddSingleton<InMemoryLogStore>();
         builder.Services.AddSingleton<TelegramNotifier>();
+        builder.Services.AddSingleton<BoardLinkState>();
 
         // ─── Domain services ──────────────────────────────────────────────
         builder.Services.AddSingleton<ScreenModelReader>();
@@ -120,6 +121,8 @@ internal static partial class Program
         builder.Services.AddHostedService<Worker>();
         builder.Services.AddSingleton<LedBoardService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LedBoardService>());
+        builder.Services.AddSingleton<BoardLinkMonitor>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<BoardLinkMonitor>());
 
         // ─── Web API + Swagger ────────────────────────────────────────────
         builder.Services.AddControllers();

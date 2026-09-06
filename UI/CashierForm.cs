@@ -17,6 +17,7 @@ internal sealed class CashierForm : Form
     private Button _btnSend = null!;
     private Button _btnPowerOn = null!;
     private Button _btnPowerOff = null!;
+    private Button _btnHelp = null!;
 
     // Big colored diagnostic banner at the top of the window.
     private Panel _banner = null!;
@@ -125,7 +126,22 @@ internal sealed class CashierForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Text = "Точка: —",
         };
+        _btnHelp = new RoundedButton
+        {
+            Text = "?",
+            Width = 26,
+            Height = 26,
+            BackColor = UITheme.Input,
+            ForeColor = UITheme.Text,
+            Font = new Font("Segoe UI Semibold", 10f),
+            CornerRadius = 13,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+        };
+        _btnHelp.Click += (_, _) => ShowHelp();
         pointRow.Controls.Add(_lblPoint);
+        pointRow.Controls.Add(_btnHelp);
+        pointRow.Resize += (_, _) =>
+            _btnHelp.Location = new Point(pointRow.ClientSize.Width - _btnHelp.Width - 12, 3);
 
         // ─── Status banner (under header) ──────────────────────────────────
         _banner = new Panel { Dock = DockStyle.Top, Height = 50, BackColor = BannerGreen, Padding = new Padding(10, 4, 10, 4) };
@@ -140,14 +156,18 @@ internal sealed class CashierForm : Form
         _banner.Controls.Add(_bannerLabel);
 
         // ─── Action buttons + status (bottom) ──────────────────────────────
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 192, BackColor = UITheme.Panel, Padding = new Padding(12, 10, 12, 10) };
-        bottom.Controls.Add(new Label { Height = 2, Dock = DockStyle.Top, BackColor = UITheme.Accent });
+        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 192, BackColor = UITheme.Panel, Padding = new Padding(14, 12, 14, 10) };
+        bottom.Paint += (s, e) =>
+        {
+            using var pen = new Pen(UITheme.Border, 1f);
+            e.Graphics.DrawLine(pen, 0, 0, bottom.Width, 0);
+        };
 
-        _btnRefresh = MakeBigButton("⟳  Обновить курсы из API", Color.FromArgb(120, 80, 160));
+        _btnRefresh = MakeBigButton("⟳  Обновить курсы из API", UITheme.Accent2);
         _btnRefresh.Location = new Point(12, 16);
         _btnRefresh.Click += async (_, _) => await RefreshRatesAsync();
 
-        _btnSend = MakeBigButton("📤  Загрузить на табло", Color.FromArgb(0, 168, 132));
+        _btnSend = MakeBigButton("📤  Загрузить на табло", Color.FromArgb(16, 163, 127));
         _btnSend.Location = new Point(12, 64);
         _btnSend.Click += async (_, _) => await SendToBoardAsync();
 
@@ -248,6 +268,61 @@ internal sealed class CashierForm : Form
         _cfg = AppSettingsManager.Load();
         _lblPoint.Text = $"Точка: {_cfg.ActivePointId}";
     }
+
+    // ─── Help ───────────────────────────────────────────────────────────────
+
+    private void ShowHelp()
+    {
+        using var dlg = new Form
+        {
+            Text = "Как это работает",
+            Size = new Size(480, 520),
+            MinimumSize = new Size(360, 360),
+            StartPosition = FormStartPosition.CenterParent,
+            BackColor = UITheme.Bg,
+            Icon = TrayApplicationContext.CreateAppIcon(),
+        };
+
+        var rtb = new RichTextBox
+        {
+            Dock = DockStyle.Fill,
+            ReadOnly = true,
+            BorderStyle = BorderStyle.None,
+            BackColor = UITheme.Bg,
+            ForeColor = UITheme.Text,
+            Font = UIFont,
+        };
+        // Reuse the admin Wiki tab's markup renderer (SettingsForm.RenderWikiMarkup) so the
+        // cashier help reads consistently with the admin documentation.
+        SettingsForm.RenderWikiMarkup(rtb, "Как пользоваться окном кассира", HelpText);
+
+        dlg.Controls.Add(rtb);
+        dlg.ShowDialog(this);
+    }
+
+    private const string HelpText =
+        """
+        ## Кнопки
+
+        - «⟳ Обновить курсы из API» — запрашивает свежие курсы и перерисовывает
+          превью. Табло при этом ещё не обновляется — только картинка в окне.
+        - «📤 Загрузить на табло» — отправляет то, что показано в превью,
+          непосредственно на экран табло.
+        - «Включить» / «Выключить» — питание самого табло (с подтверждением,
+          чтобы не нажать случайно).
+
+        ## Если что-то не так
+
+        - На табло старые курсы — нажмите «Обновить курсы из API», затем
+          «Загрузить на табло».
+        - Табло не реагирует — посмотрите на цветную полосу под шапкой окна:
+          она подсказывает, в чём проблема (нет Wi-Fi табло, ПО не отвечает,
+          ошибка отправки).
+        - Полоса красная и просит подключиться к Wi-Fi — подключите этот
+          компьютер к сети табло, полоса исчезнет сама, когда связь появится.
+        - Если ничего не помогает — обратитесь к администратору, полные
+          настройки и журнал есть в окне «Настройки».
+        """;
 
     // ─── Actions ────────────────────────────────────────────────────────────
 

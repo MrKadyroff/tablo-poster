@@ -19,19 +19,25 @@ public sealed class LedController : ControllerBase
     private readonly InMemoryLogStore _logStore;
     private readonly OnbonOptions _onbonOptions;
     private readonly ServiceOptions _serviceOptions;
+    private readonly BoardLinkState _boardLink;
+    private readonly BoardLinkMonitor _boardLinkMonitor;
 
     public LedController(
         ILedController led,
         LedBoardService boardService,
         InMemoryLogStore logStore,
         IOptions<OnbonOptions> onbonOptions,
-        IOptions<ServiceOptions> serviceOptions)
+        IOptions<ServiceOptions> serviceOptions,
+        BoardLinkState boardLink,
+        BoardLinkMonitor boardLinkMonitor)
     {
         _led = led;
         _boardService = boardService;
         _logStore = logStore;
         _onbonOptions = onbonOptions.Value;
         _serviceOptions = serviceOptions.Value;
+        _boardLink = boardLink;
+        _boardLinkMonitor = boardLinkMonitor;
     }
 
     // ─── POST /api/led/update ─────────────────────────────────────────────────
@@ -136,6 +142,30 @@ public sealed class LedController : ControllerBase
             ControllerInfo: info,
             Firmware: firmware));
     }
+
+    // ─── GET /api/led/board-link ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the latest "board link" snapshot from <c>BoardLinkMonitor</c>: whether the
+    /// PC is on the LED controller's Wi-Fi, the discovered controller IP, connectivity
+    /// probe results, and the recommendation. Null fields until the first scan.
+    /// </summary>
+    [HttpGet("board-link")]
+    [ProducesResponseType(typeof(BoardLinkReport), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public IActionResult GetBoardLink()
+    {
+        var latest = _boardLink.Latest;
+        return latest is null ? NoContent() : Ok(latest);
+    }
+
+    // ─── POST /api/led/board-link/recheck ─────────────────────────────────────
+
+    /// <summary>Forces an immediate board-link re-scan and returns the fresh report.</summary>
+    [HttpPost("board-link/recheck")]
+    [ProducesResponseType(typeof(BoardLinkReport), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RecheckBoardLink(CancellationToken ct)
+        => Ok(await _boardLinkMonitor.RecheckAsync(ct));
 
     // ─── POST /api/led/clear ──────────────────────────────────────────────────
 

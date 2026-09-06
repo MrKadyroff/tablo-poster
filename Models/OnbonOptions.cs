@@ -96,4 +96,26 @@ public sealed class OnbonOptions
     /// If false, mismatched images are logged and still processed.
     /// </summary>
     public bool RejectSizeMismatchBeforePublish { get; init; } = true;
+
+    // ─── Board-link monitor (auto-detect the controller on the board's Wi-Fi) ─
+
+    /// <summary>
+    /// When true (default), <c>BoardLinkMonitor</c> watches for the PC joining the LED
+    /// controller's own Wi-Fi (an "island" AP with no internet — the on-site/AnyDesk
+    /// scenario) and runs connectivity diagnostics against the AP's gateway (in AP mode
+    /// the controller IS the gateway).
+    /// </summary>
+    public bool AutoDetectOnApLink { get; init; } = true;
+
+    /// <summary>
+    /// When true (default), if the monitor finds the controller on the board Wi-Fi at an
+    /// IP that differs from <see cref="ControllerIp"/>, it applies the discovered IP at
+    /// runtime and patches the active point's config file. Only fires on an island AP
+    /// (private IP, no internet) so a deliberate static LAN IP is never clobbered.
+    /// </summary>
+    public bool AutoApplyControllerIp { get; init; } = true;
+
+    /// <summary>Re-evaluation interval (seconds) for the board-link monitor's safety poll.</summary>
+    [Range(5, 600)]
+    public int BoardLinkPollSeconds { get; init; } = 30;
 }

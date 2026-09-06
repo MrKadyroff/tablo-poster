@@ -38,6 +38,13 @@ public sealed class OnbonLedController : IDisposable, ILedController
     private readonly ILogger<OnbonLedController> _logger;
     private readonly OnbonOptions _options;
     private readonly InMemoryLogStore _logStore;
+    private readonly BoardLinkState _boardLink;
+
+    /// <summary>
+    /// Effective controller IP: the address <see cref="BoardLinkMonitor"/> auto-detected
+    /// and applied at runtime (when on the board's own Wi-Fi AP), or the configured value.
+    /// </summary>
+    private string ControllerIp => _boardLink.OverrideControllerIp ?? _options.ControllerIp;
 
     // Ensures only one SDK operation runs at a time (YQNetCom.dll is not thread-safe).
     private readonly SemaphoreSlim _sdkLock = new(1, 1);
@@ -229,14 +236,16 @@ public sealed class OnbonLedController : IDisposable, ILedController
     public OnbonLedController(
         ILogger<OnbonLedController> logger,
         IOptions<OnbonOptions> options,
-        InMemoryLogStore logStore)
+        InMemoryLogStore logStore,
+        BoardLinkState boardLink)
     {
         _logger = logger;
         _options = options.Value;
         _logStore = logStore;
+        _boardLink = boardLink;
 
         Log(LogLevel.Information,
-            $"[Onbon] Initializing. Controller={_options.ControllerIp}:{_options.ControllerPort} " +
+            $"[Onbon] Initializing. Controller={ControllerIp}:{_options.ControllerPort} " +
             $"Screen={_options.ScreenWidth}x{_options.ScreenHeight} DeviceType={_options.DeviceType} " +
             $"Enabled={_options.Enabled} OS={RuntimeInformation.OSDescription}");
 
@@ -267,7 +276,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
     /// </summary>
     public async Task<ConnectionCheckResult> CheckConnectionAsync(CancellationToken ct = default)
     {
-        var ip = _options.ControllerIp;
+        var ip = ControllerIp;
         var port = _options.ControllerPort;
 
         Log(LogLevel.Information,
@@ -669,7 +678,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
                 var fw = new byte[64];
                 var app = new byte[64];
                 var fpga = new byte[60];
-                var ip = Encoding.ASCII.GetBytes(_options.ControllerIp);
+                var ip = Encoding.ASCII.GetBytes(ControllerIp);
 
                 int err = get_firmware_version(
                     ip, (ushort)_options.ControllerPort,
@@ -715,7 +724,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
                 var custOnOff = new byte[1024];
                 var language = new byte[1024];
                 var gps = new byte[1024];
-                var ip = Encoding.ASCII.GetBytes(_options.ControllerIp);
+                var ip = Encoding.ASCII.GetBytes(ControllerIp);
 
                 int err = get_screen_status(
                     ip, (ushort)_options.ControllerPort,
@@ -764,7 +773,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
             return await Task.Run(() =>
             {
                 var data = new byte[1024 * 10];
-                var ip = Encoding.ASCII.GetBytes(_options.ControllerIp);
+                var ip = Encoding.ASCII.GetBytes(ControllerIp);
 
                 int err = get_screen_parameters(
                     ip, (ushort)_options.ControllerPort,
@@ -820,7 +829,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
         {
             return await ExecuteWithRetryAsync("SetBrightness", () =>
             {
-                var ip = Encoding.ASCII.GetBytes(_options.ControllerIp);
+                var ip = Encoding.ASCII.GetBytes(ControllerIp);
                 int err = set_screen_brightness(
                     ip, (ushort)_options.ControllerPort,
                     _options.UserName, _options.Password, brightness);
@@ -842,7 +851,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
         {
             return await ExecuteWithRetryAsync("SetPower", () =>
             {
-                var ip = Encoding.ASCII.GetBytes(_options.ControllerIp);
+                var ip = Encoding.ASCII.GetBytes(ControllerIp);
                 // SDK: 1=ON, 0=OFF
                 int err = set_screen_turnonoff(
                     ip, (ushort)_options.ControllerPort,
@@ -866,7 +875,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
         {
             return await ExecuteWithRetryAsync("Reboot", () =>
             {
-                var ip = Encoding.ASCII.GetBytes(_options.ControllerIp);
+                var ip = Encoding.ASCII.GetBytes(ControllerIp);
                 int err = reboot(
                     ip, (ushort)_options.ControllerPort,
                     _options.UserName, _options.Password);
@@ -953,7 +962,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
             err = add_program_in_playlist(playlist, program, 1, 10, "", "", "", "", 127);
             Log(LogLevel.Debug, $"[SendImage] [SDK] add_program_in_playlist → {err}");
 
-            var ipBytes = Encoding.ASCII.GetBytes(_options.ControllerIp);
+            var ipBytes = Encoding.ASCII.GetBytes(ControllerIp);
             if (!tempPath.EndsWith(Path.DirectorySeparatorChar) && !tempPath.EndsWith(Path.AltDirectorySeparatorChar))
                 tempPath += Path.DirectorySeparatorChar;
 
@@ -961,7 +970,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
             var playlistName = new byte[1024];
 
             Log(LogLevel.Information,
-                $"[SendImage] [SDK] send_program → {_options.ControllerIp}:{_options.ControllerPort} " +
+                $"[SendImage] [SDK] send_program → {ControllerIp}:{_options.ControllerPort} " +
                 $"tmpPath={tempPath} media={sdkMediaPath}");
 
             Log(LogLevel.Debug, "[SendImage] [SDK] send_program call started...");
@@ -1106,7 +1115,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
             errorCode = add_program_in_playlist(playlist, program, 1, 10, "", "", "", "", 127);
             if (errorCode != 0) return false;
 
-            var ipBytes = Encoding.ASCII.GetBytes(_options.ControllerIp);
+            var ipBytes = Encoding.ASCII.GetBytes(ControllerIp);
             errorCode = update_dynamic(
                 ipBytes,
                 (ushort)_options.ControllerPort,
@@ -1148,9 +1157,9 @@ public sealed class OnbonLedController : IDisposable, ILedController
 
     private bool ClearScreenCore()
     {
-        var ipBytes = Encoding.ASCII.GetBytes(_options.ControllerIp);
+        var ipBytes = Encoding.ASCII.GetBytes(ControllerIp);
         Log(LogLevel.Information,
-            $"[SendImage] [SDK] clear_all_program → {_options.ControllerIp}:{_options.ControllerPort}");
+            $"[SendImage] [SDK] clear_all_program → {ControllerIp}:{_options.ControllerPort}");
 
         int err = clear_all_program(ipBytes, (ushort)_options.ControllerPort,
             _options.UserName, _options.Password);

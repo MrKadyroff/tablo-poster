@@ -13,25 +13,25 @@ internal sealed class SettingsForm : Form
     // Tab: Валюты
     private const int MaxColumns = 3;
     private readonly ListBox[] _lstColumns = new ListBox[MaxColumns];
-    private readonly GroupBox[] _grpColumns = new GroupBox[MaxColumns];
-    private NumericUpDown _numColumnCount = null!;
+    private readonly GroupBox[] _grpColumns = new CardBox[MaxColumns];
+    private NumericStepper _numColumnCount = null!;
     private ComboBox _cmbAddTarget = null!;
 
     // Tab: Заголовки (per-column buy/sell labels)
     private readonly TextBox[] _txtBuyLabels = new TextBox[MaxColumns];
     private readonly TextBox[] _txtSellLabels = new TextBox[MaxColumns];
-    private readonly GroupBox[] _grpHeaderCols = new GroupBox[MaxColumns];
+    private readonly GroupBox[] _grpHeaderCols = new CardBox[MaxColumns];
 
     // Tab: Табло
-    private NumericUpDown _numW = null!, _numH = null!;
+    private NumericStepper _numW = null!, _numH = null!;
 
     // Tab: Дизайн
     private LayoutEditorControl _editor = null!;
-    private NumericUpDown _numFszValue = null!, _numFszCode = null!, _numFszHdr = null!, _numFszArrow = null!;
-    private NumericUpDown _numFlagW = null!, _numFlagH = null!, _numLogoW = null!, _numLogoH = null!;
-    private NumericUpDown _numRowsStartY = null!, _numRowH = null!;
+    private NumericStepper _numFszValue = null!, _numFszCode = null!, _numFszHdr = null!, _numFszArrow = null!;
+    private NumericStepper _numFlagW = null!, _numFlagH = null!, _numLogoW = null!, _numLogoH = null!;
+    private NumericStepper _numRowsStartY = null!, _numRowH = null!;
     // Per-column X placement (free column layout, e.g. centred logo with rates on both sides)
-    private readonly NumericUpDown[] _numColX = new NumericUpDown[MaxColumns];
+    private readonly NumericStepper[] _numColX = new NumericStepper[MaxColumns];
     private CheckBox _chkManualColX = null!;
     private bool _suppressSync;
     private TabControl _tabs = null!;
@@ -45,7 +45,7 @@ internal sealed class SettingsForm : Form
 
     // Tab: Сервис
     private ComboBox _cmbRunMode = null!, _cmbPublishMode = null!;
-    private NumericUpDown _numPoll = null!, _numRatesFetch = null!;
+    private NumericStepper _numPoll = null!, _numRatesFetch = null!;
     private CheckBox _chkLayout = null!, _chkAutoSend = null!, _chkSkipUnchanged = null!;
     private CheckBox _chkForceCompose = null!;
 
@@ -53,13 +53,15 @@ internal sealed class SettingsForm : Form
     private TextBox _txtIp = null!, _txtFtpUser = null!, _txtFtpPass = null!;
     private TextBox _txtRatesUrl = null!, _txtReloadUrl = null!, _txtApiPort = null!;
     private TextBox _txtWifiSsid = null!;
-    private NumericUpDown _numCtrlPort = null!, _numFtpPort = null!, _numDevice = null!;
+    private NumericStepper _numCtrlPort = null!, _numFtpPort = null!, _numDevice = null!;
     private ComboBox _cmbModel = null!;
     private ComboBox _cmbConnMode = null!;
     private ComboBox _cmbFamily = null!;
     // Rows hidden/shown based on selected family.
     private Label? _lblCtrlPort, _lblModel, _lblDevice, _lblConnMode;
     private Label? _lblIp;
+    private Button _btnDetectIp = null!;
+    private FlowLayoutPanel _pnlIp = null!;
     private Label _lblPowerStatus = null!;
     private Label _lblConnTestResult = null!;
     private CheckBox _chkTls = null!;
@@ -67,7 +69,7 @@ internal sealed class SettingsForm : Form
     // Tab: Дополнительно
     private CheckBox _chkOnbonEnabled = null!, _chkIsolated = null!;
     private CheckBox _chkSkipDup = null!, _chkRejectSize = null!, _chkWifiOnly = null!, _chkPrivate = null!;
-    private NumericUpDown _numRetry = null!, _numRetryMs = null!, _numConnTimeout = null!, _numOnbonPoll = null!;
+    private NumericStepper _numRetry = null!, _numRetryMs = null!, _numConnTimeout = null!, _numOnbonPoll = null!;
     private TextBox _txtOnbonUser = null!, _txtOnbonPass = null!;
     // Telegram notifications (token/chatId/enabled live in appsettings.json, edited by hand)
     private Button _btnTelegramTest = null!;
@@ -97,8 +99,8 @@ internal sealed class SettingsForm : Form
 
         Font = UIFont;
         Text = "eCash Tablo — Настройки";
-        Size = new Size(700, 620);
-        MinimumSize = new Size(680, 580);
+        Size = new Size(940, 740);
+        MinimumSize = new Size(860, 660);
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = true;
         Icon = TrayApplicationContext.CreateAppIcon();
@@ -162,13 +164,21 @@ internal sealed class SettingsForm : Form
         header.Controls.AddRange([lblTitle, lblSub]);
 
         // ─── Point selector row ────────────────────────────────────────────
-        var pointRow = new Panel { Dock = DockStyle.Top, Height = 36, Padding = new Padding(8, 6, 8, 0) };
-        var lblPoint = new Label { Text = "Активная точка:", AutoSize = true, Location = new Point(8, 10) };
+        var pointRow = new Panel { Dock = DockStyle.Top, Height = 44, BackColor = UITheme.Panel, Padding = new Padding(18, 8, 18, 8) };
+        var lblPoint = new Label
+        {
+            Text = "АКТИВНАЯ ТОЧКА",
+            AutoSize = true,
+            Location = new Point(18, 14),
+            ForeColor = UITheme.TextDim,
+            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold),
+        };
         _cmbPoint = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Location = new Point(130, 6),
-            Width = 180,
+            Location = new Point(140, 9),
+            Width = 220,
+            Font = new Font("Segoe UI Semibold", 9.5f),
         };
         _cmbPoint.Items.AddRange(AppSettingsManager.GetAvailablePoints());
         _cmbPoint.SelectedIndexChanged += (_, _) =>
@@ -202,17 +212,17 @@ internal sealed class SettingsForm : Form
         };
 
         // ─── Footer ────────────────────────────────────────────────────────
-        var footer = new Panel { Dock = DockStyle.Bottom, Height = 48, BackColor = UITheme.Panel };
-        footer.Controls.Add(new Label
+        var footer = new Panel { Dock = DockStyle.Bottom, Height = 60, BackColor = UITheme.Panel, Padding = new Padding(16, 11, 16, 11) };
+        footer.Paint += (s, e) =>
         {
-            Height = 2,
-            Dock = DockStyle.Top,
-            BackColor = UITheme.Accent,
-        });
+            using var pen = new Pen(UITheme.Border, 1f);
+            e.Graphics.DrawLine(pen, 0, 0, footer.Width, 0);
+        };
 
-        var btnSaveRestart = MakeButton("⟳ Сохранить и перезапустить", UITheme.Accent2, Color.White);
-        btnSaveRestart.Location = new Point(8, 9);
-        btnSaveRestart.Width = 230;
+        var btnSaveRestart = MakeButton("⟳  Сохранить и перезапустить", UITheme.Accent2, Color.White);
+        btnSaveRestart.Location = new Point(16, 11);
+        btnSaveRestart.Width = 248;
+        btnSaveRestart.Height = 38;
         btnSaveRestart.Click += (_, _) =>
         {
             if (CollectForm())
@@ -223,9 +233,10 @@ internal sealed class SettingsForm : Form
             }
         };
 
-        var btnSave = MakeButton("💾 Сохранить", Color.FromArgb(0, 168, 132), Color.White);
-        btnSave.Location = new Point(246, 9);
-        btnSave.Width = 120;
+        var btnSave = MakeButton("💾  Сохранить", Color.FromArgb(16, 163, 127), Color.White);
+        btnSave.Location = new Point(272, 11);
+        btnSave.Width = 132;
+        btnSave.Height = 38;
         btnSave.Click += (_, _) =>
         {
             if (CollectForm())
@@ -237,8 +248,9 @@ internal sealed class SettingsForm : Form
         };
 
         var btnClose = MakeButton("Закрыть", UITheme.Input, UITheme.Text);
-        btnClose.Location = new Point(374, 9);
-        btnClose.Width = 90;
+        btnClose.Location = new Point(412, 11);
+        btnClose.Width = 100;
+        btnClose.Height = 38;
         btnClose.Click += (_, _) => Hide();
 
         footer.Controls.AddRange([btnSaveRestart, btnSave, btnClose]);
@@ -265,32 +277,32 @@ internal sealed class SettingsForm : Form
             Text = "Выберите валюты. Порядок в списке — порядок на табло. Выберите валюту слева, укажите колонку и нажмите «Добавить».",
             Dock = DockStyle.Top,
             Height = 24,
-            ForeColor = Color.Gray,
+            ForeColor = UITheme.TextDim,
         };
 
         // Top strip: column count + add target
-        var strip = new Panel { Dock = DockStyle.Top, Height = 34 };
-        var lblCols = new Label { Text = "Колонок:", AutoSize = true, Location = new Point(4, 9) };
+        var strip = new Panel { Dock = DockStyle.Top, Height = 46, Padding = new Padding(0, 4, 0, 4) };
+        var lblCols = new Label { Text = "Колонок:", AutoSize = true, Location = new Point(4, 13) };
         _numColumnCount = MakeNumeric(1, MaxColumns);
-        _numColumnCount.Location = new Point(70, 5);
-        _numColumnCount.Width = 50;
+        _numColumnCount.Location = new Point(72, 6);
+        _numColumnCount.Width = 96;
         _numColumnCount.ValueChanged += (_, _) => ApplyColumnCount((int)_numColumnCount.Value);
 
-        var lblTarget = new Label { Text = "Добавить в колонку:", AutoSize = true, Location = new Point(140, 9) };
-        _cmbAddTarget = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 60, Location = new Point(270, 5) };
+        var lblTarget = new Label { Text = "Добавить в колонку:", AutoSize = true, Location = new Point(184, 13) };
+        _cmbAddTarget = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 64, Location = new Point(314, 10) };
         strip.Controls.AddRange([lblCols, _numColumnCount, lblTarget, _cmbAddTarget]);
 
         // All currencies panel (left side)
-        var grpAll = new GroupBox { Text = "Все доступные", Dock = DockStyle.Left, Width = 210 };
+        var grpAll = new CardBox { Text = "Все доступные", Dock = DockStyle.Left, Width = 210 };
         var lstAll = new ListBox { Dock = DockStyle.Fill, Font = UIFont, SelectionMode = SelectionMode.MultiExtended };
         grpAll.Controls.Add(lstAll);
 
         // Add/remove buttons
         var btnPanel = new Panel { Dock = DockStyle.Left, Width = 80 };
-        var btnAdd = MakeArrow("→ Доб", Color.FromArgb(0, 102, 204), Color.White);
-        btnAdd.Location = new Point(10, 40);
-        var btnRem = MakeArrow("← Уб", Color.Salmon, Color.White);
-        btnRem.Location = new Point(10, 80);
+        var btnAdd = MakeArrow("→ Доб", UITheme.Accent2, Color.White);
+        btnAdd.Location = new Point(10, 44);
+        var btnRem = MakeArrow("← Уб", UITheme.Danger, Color.White);
+        btnRem.Location = new Point(10, 86);
         btnPanel.Controls.AddRange([btnAdd, btnRem]);
 
         // Column listboxes host
@@ -298,7 +310,7 @@ internal sealed class SettingsForm : Form
         for (int i = MaxColumns - 1; i >= 0; i--)
         {
             int idx = i;
-            var grp = new GroupBox
+            var grp = new CardBox
             {
                 Text = $"Колонка {idx + 1}",
                 Dock = idx == 0 ? DockStyle.Fill : DockStyle.Left,
@@ -387,19 +399,19 @@ internal sealed class SettingsForm : Form
             Text = "Заголовки «Покупаем/Продаём» для каждой колонки. По строке на язык (напр. казахский / русский / английский).",
             Dock = DockStyle.Top,
             Height = 36,
-            ForeColor = Color.Gray,
+            ForeColor = UITheme.TextDim,
         };
 
         var host = new Panel { Dock = DockStyle.Fill };
         for (int i = MaxColumns - 1; i >= 0; i--)
         {
             int idx = i;
-            var grp = new GroupBox
+            var grp = new CardBox
             {
                 Text = $"Колонка {idx + 1}",
                 Dock = idx == 0 ? DockStyle.Fill : DockStyle.Left,
                 Width = 230,
-                Padding = new Padding(6),
+                Padding = new Padding(12, 36, 12, 12),
             };
 
             var lblBuy = new Label { Text = "Покупаем:", Dock = DockStyle.Top, Height = 18 };
@@ -451,8 +463,8 @@ internal sealed class SettingsForm : Form
 
     private TabPage BuildDisplayTab()
     {
-        var tab = new TabPage("Размер табло") { Padding = new Padding(12) };
-        var grp = new GroupBox { Text = "Размер холста (пикселей)", Dock = DockStyle.Top, Height = 130, Padding = new Padding(12) };
+        var tab = new TabPage("Размер табло") { Padding = new Padding(16) };
+        var grp = new CardBox { Text = "Размер холста (пикселей)", Dock = DockStyle.Top, Height = 130, Padding = new Padding(16, 36, 16, 14) };
 
         _numW = MakeNumeric(8, 4096);
         _numH = MakeNumeric(8, 4096);
@@ -469,7 +481,7 @@ internal sealed class SettingsForm : Form
         {
             Text = "Размер должен совпадать с ScreenWidth/ScreenHeight в настройках подключения и с физическими размерами табло.",
             Dock = DockStyle.Top,
-            ForeColor = Color.Gray,
+            ForeColor = UITheme.TextDim,
             Height = 36,
         };
         tab.Controls.Add(grp);
@@ -491,12 +503,70 @@ internal sealed class SettingsForm : Form
             ScheduleLivePreview();
         };
 
-        // Side panel on the right
-        var side = new Panel { Dock = DockStyle.Right, Width = 248, Padding = new Padding(8), AutoScroll = true };
+        // Side panel on the right — a single scrolling column so nothing can overlap.
+        var side = new Panel { Dock = DockStyle.Right, Width = 340, Padding = new Padding(14, 12, 14, 14), AutoScroll = true, BackColor = UITheme.Panel };
+        side.Paint += (s, e) =>
+        {
+            using var pen = new Pen(UITheme.Border, 1f);
+            e.Graphics.DrawLine(pen, 0, 0, 0, side.Height);
+        };
 
-        var btnAuto = MakeButton("⊞ Раскидка по размеру", Color.FromArgb(0, 102, 204), Color.White);
-        btnAuto.Dock = DockStyle.Top;
-        btnAuto.Height = 34;
+        var col = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+        col.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        const int textWrap = 290;
+
+        // Local helper: append a control as its own full-width, auto-sized row.
+        void AddSide(Control c, bool fill = true)
+        {
+            int row = col.RowCount;
+            col.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            col.RowCount = row + 1;
+            if (fill) c.Dock = DockStyle.Top;
+            col.Controls.Add(c, 0, row);
+        }
+
+        Label Caption(string text) => new()
+        {
+            Text = text,
+            AutoSize = false,
+            Height = 24,
+            ForeColor = UITheme.TextDim,
+            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(2, 12, 2, 2),
+            Dock = DockStyle.Top,
+        };
+
+        Label WrapHint(string text) => new()
+        {
+            Text = text,
+            AutoSize = true,
+            MaximumSize = new Size(textWrap, 0),
+            ForeColor = UITheme.TextDim,
+            Font = new Font("Segoe UI", 8.5f),
+            Margin = new Padding(2, 4, 2, 6),
+        };
+
+        Button SideButton(string text, Color bg, Color fg)
+        {
+            var b = MakeButton(text, bg, fg);
+            b.Height = 38;
+            b.Margin = new Padding(0, 4, 0, 0);
+            return b;
+        }
+
+        CheckBox SideCheck(string text) => new()
+        {
+            Text = text,
+            AutoSize = true,
+            Checked = true,
+            ForeColor = UITheme.Text,
+            Margin = new Padding(2, 6, 2, 2),
+        };
+
+        // ── Section: превью и раскладка ────────────────────────────────────────
+        var btnAuto = SideButton("⊞  Раскидка по размеру", UITheme.Accent2, Color.White);
         btnAuto.Click += (_, _) =>
         {
             PullCurrencies();
@@ -506,67 +576,23 @@ internal sealed class SettingsForm : Form
             SyncDesignNumericsFromConfig();
         };
 
-        var btnPreview = MakeButton("👁 Обновить превью", Color.FromArgb(0, 153, 76), Color.White);
-        btnPreview.Dock = DockStyle.Top;
-        btnPreview.Height = 34;
+        var btnPreview = SideButton("👁  Обновить превью", Color.FromArgb(16, 163, 127), Color.White);
         btnPreview.Click += (_, _) => _ = RenderPreviewAsync(silent: false);
 
-        var btnApi = MakeButton("⟳ Загрузить курсы из API", Color.FromArgb(120, 80, 160), Color.White);
-        btnApi.Dock = DockStyle.Top;
-        btnApi.Height = 34;
+        var btnApi = SideButton("⟳  Загрузить курсы из API", Color.FromArgb(124, 92, 173), Color.White);
         btnApi.Click += (_, _) => _ = FetchRatesAndPreviewAsync();
 
-        _chkAutoPreview = new CheckBox
-        {
-            Text = "Авто-обновление при правках",
-            Dock = DockStyle.Top,
-            Height = 24,
-            Checked = true,
-            ForeColor = Color.White,
-        };
+        _chkAutoPreview = SideCheck("Авто-обновление при правках");
+        _lblPreviewStatus = new Label { AutoSize = true, ForeColor = UITheme.TextDim, Text = "", Margin = new Padding(2, 2, 2, 2) };
 
-        // ── Manual send to board (for points without permanent internet) ───────
-        var btnSend = MakeButton("📤 Отправить на табло", Color.FromArgb(0, 168, 132), Color.White);
-        btnSend.Dock = DockStyle.Top;
-        btnSend.Height = 34;
+        // ── Section: отправка на табло ─────────────────────────────────────────
+        var btnSend = SideButton("📤  Отправить на табло", Color.FromArgb(0, 168, 132), Color.White);
         btnSend.Click += (_, _) => _ = SendToBoardAsync();
 
-        _chkPermanentInternet = new CheckBox
-        {
-            Text = "Интернет постоянный (автоотправка)",
-            Dock = DockStyle.Top,
-            Height = 24,
-            Checked = true,
-            ForeColor = Color.White,
-        };
-
-        _lblSendStatus = new Label
-        {
-            Dock = DockStyle.Top,
-            Height = 20,
-            ForeColor = Color.Gray,
-            Text = "",
-        };
-
-        var sendHint = new Label
-        {
-            Dock = DockStyle.Top,
-            Height = 50,
-            ForeColor = Color.Gray,
-            Text = "Снимите галочку для точек без постоянного интернета: курсы и картинка обновляются, " +
-                   "а на табло отправляйте вручную кнопкой выше. Изменение галочки применяется после " +
-                   "«Сохранить и перезапустить».",
-        };
-
-        _lblPreviewStatus = new Label
-        {
-            Dock = DockStyle.Top,
-            Height = 20,
-            ForeColor = Color.Gray,
-            Text = "",
-        };
-
-        var spacer = new Panel { Dock = DockStyle.Top, Height = 6 };
+        _chkPermanentInternet = SideCheck("Интернет постоянный (автоотправка)");
+        _lblSendStatus = new Label { AutoSize = true, ForeColor = UITheme.TextDim, Text = "", Margin = new Padding(2, 2, 2, 2) };
+        var sendHint = WrapHint("Снимите галочку для точек без постоянного интернета: курсы и картинка "
+            + "обновляются, а на табло отправляйте вручную кнопкой выше. Применяется после «Сохранить и перезапустить».");
 
         // Debounce timer for live preview while editing
         _previewDebounce = new System.Windows.Forms.Timer { Interval = 500 };
@@ -576,9 +602,12 @@ internal sealed class SettingsForm : Form
             _ = RenderPreviewAsync(silent: true);
         };
 
-        // Numeric controls
-        var grpFonts = new GroupBox { Text = "Размеры шрифтов", Dock = DockStyle.Top, Height = 130, Padding = new Padding(6) };
-        var fonts = NumGrid();
+        // Numeric controls — cards auto-size to their content (no fixed heights to overflow).
+        CardBox NumCard(string title)
+            => new() { Text = title, Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 6, 0, 0), Padding = new Padding(10, 34, 10, 12) };
+
+        var grpFonts = NumCard("Размеры шрифтов");
+        var fonts = NumGrid(); fonts.Dock = DockStyle.Top;
         _numFszValue = MakeNumeric(1, 200);
         _numFszCode = MakeNumeric(1, 200);
         _numFszHdr = MakeNumeric(1, 200);
@@ -589,8 +618,8 @@ internal sealed class SettingsForm : Form
         AddRow(fonts, "Стрелка:", _numFszArrow);
         grpFonts.Controls.Add(fonts);
 
-        var grpFlag = new GroupBox { Text = "Флаг и лого", Dock = DockStyle.Top, Height = 130, Padding = new Padding(6) };
-        var flag = NumGrid();
+        var grpFlag = NumCard("Флаг и лого");
+        var flag = NumGrid(); flag.Dock = DockStyle.Top;
         _numFlagW = MakeNumeric(2, 4096);
         _numFlagH = MakeNumeric(2, 4096);
         _numLogoW = MakeNumeric(2, 4096);
@@ -601,8 +630,8 @@ internal sealed class SettingsForm : Form
         AddRow(flag, "Лого высота:", _numLogoH);
         grpFlag.Controls.Add(flag);
 
-        var grpRows = new GroupBox { Text = "Строки", Dock = DockStyle.Top, Height = 86, Padding = new Padding(6) };
-        var rowsG = NumGrid();
+        var grpRows = NumCard("Строки");
+        var rowsG = NumGrid(); rowsG.Dock = DockStyle.Top;
         _numRowsStartY = MakeNumeric(0, 4096);
         _numRowH = MakeNumeric(2, 4096);
         AddRow(rowsG, "Старт строк Y:", _numRowsStartY);
@@ -610,8 +639,8 @@ internal sealed class SettingsForm : Form
         grpRows.Controls.Add(rowsG);
 
         // ── Размещение колонок (X) — свободная раскладка ──────────────────────
-        var grpColX = new GroupBox { Text = "Размещение колонок (X)", Dock = DockStyle.Top, Height = 170, Padding = new Padding(6) };
-        var colxG = NumGrid();
+        var grpColX = NumCard("Размещение колонок (X)");
+        var colxG = NumGrid(); colxG.Dock = DockStyle.Top;
         _chkManualColX = new CheckBox { Text = "Задавать X колонок вручную", AutoSize = true };
         _chkManualColX.CheckedChanged += (_, _) => { ApplyColManualEnabled(); ScheduleLivePreview(); };
         colxG.Controls.Add(_chkManualColX, 0, colxG.RowCount);
@@ -624,22 +653,19 @@ internal sealed class SettingsForm : Form
             AddRow(colxG, $"Колонка {i + 1} X:", _numColX[i]);
         }
         var btnLogoCenter = MakeButton("⊞ Лого по центру (широкое)", UITheme.Input, UITheme.Text);
-        btnLogoCenter.Width = 220;
+        btnLogoCenter.Height = 34;
+        btnLogoCenter.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        btnLogoCenter.Margin = new Padding(3, 6, 3, 3);
         btnLogoCenter.Click += (_, _) => ArrangeLogoCenter();
         colxG.Controls.Add(btnLogoCenter, 0, colxG.RowCount);
         colxG.SetColumnSpan(btnLogoCenter, 2);
         colxG.RowCount++;
         grpColX.Controls.Add(colxG);
 
-        var hint = new Label
-        {
-            Dock = DockStyle.Top,
-            Height = 70,
-            ForeColor = Color.Gray,
-            Text = "Перетаскивайте блоки мышью. Уголок выделенного блока — изменение размера. «Обновить превью» рисует реальное изображение по текущим курсам.",
-        };
+        var hint = WrapHint("Перетаскивайте блоки мышью. Уголок выделенного блока — изменение размера. "
+            + "«Обновить превью» рисует реальное изображение по текущим курсам.");
 
-        // Wire numerics → config (added in reverse dock order)
+        // Wire numerics → config
         foreach (var n in new[] { _numFszValue, _numFszCode, _numFszHdr, _numFszArrow,
                                   _numFlagW, _numFlagH, _numLogoW, _numLogoH,
                                   _numRowsStartY, _numRowH })
@@ -647,23 +673,26 @@ internal sealed class SettingsForm : Form
             n.ValueChanged += (_, _) => OnDesignNumericChanged();
         }
 
-        // Dock order: add bottom-most first (Dock=Top stacks last-added on top)
-        side.Controls.Add(hint);
-        side.Controls.Add(grpColX);
-        side.Controls.Add(grpRows);
-        side.Controls.Add(grpFlag);
-        side.Controls.Add(grpFonts);
-        side.Controls.Add(spacer);
-        side.Controls.Add(_lblPreviewStatus);
-        side.Controls.Add(_chkAutoPreview);
-        side.Controls.Add(btnPreview);
-        side.Controls.Add(btnApi);
-        side.Controls.Add(btnAuto);
-        // Manual-send section pinned to the very top of the panel
-        side.Controls.Add(sendHint);
-        side.Controls.Add(_lblSendStatus);
-        side.Controls.Add(_chkPermanentInternet);
-        side.Controls.Add(btnSend);
+        // Assemble the column top-to-bottom (natural order — no dock stacking tricks).
+        AddSide(Caption("ПРЕВЬЮ И РАСКЛАДКА"));
+        AddSide(btnAuto);
+        AddSide(btnPreview);
+        AddSide(btnApi);
+        AddSide(_chkAutoPreview);
+        AddSide(_lblPreviewStatus, fill: false);
+        AddSide(Caption("ОТПРАВКА НА ТАБЛО"));
+        AddSide(btnSend);
+        AddSide(_chkPermanentInternet);
+        AddSide(_lblSendStatus, fill: false);
+        AddSide(sendHint, fill: false);
+        AddSide(Caption("ГЕОМЕТРИЯ"));
+        AddSide(grpFonts);
+        AddSide(grpFlag);
+        AddSide(grpRows);
+        AddSide(grpColX);
+        AddSide(hint, fill: false);
+
+        side.Controls.Add(col);
 
         tab.Controls.Add(_editor);
         tab.Controls.Add(side);
@@ -809,7 +838,7 @@ internal sealed class SettingsForm : Form
         _suppressSync = false;
     }
 
-    private static void SetNum(NumericUpDown n, int v)
+    private static void SetNum(NumericStepper n, int v)
         => n.Value = Math.Clamp(v, (int)n.Minimum, (int)n.Maximum);
 
     private async Task RenderPreviewAsync(bool silent)
@@ -960,32 +989,25 @@ internal sealed class SettingsForm : Form
         _txtApiPort = new TextBox { Width = 160 };
 
         // ── Connection test ────────────────────────────────────────────────
-        var sep0 = new Label { Text = "───── ПРОВЕРКА СОЕДИНЕНИЯ ─────", ForeColor = Color.Gray, Height = 20 };
-        layout.Controls.Add(sep0, 0, layout.RowCount);
-        layout.SetColumnSpan(sep0, 2);
+        AddFullRow(layout, MakeDivider("ПРОВЕРКА СОЕДИНЕНИЯ"));
 
         var testRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
-        var btnTest = MakeButton("🔍 Проверить соединение", Color.FromArgb(0, 102, 204), Color.White);
+        var btnTest = MakeButton("🔍 Проверить соединение", UITheme.Accent2, Color.White);
         btnTest.Width = 200;
         btnTest.Click += (_, _) => _ = TestConnectionAsync();
         testRow.Controls.Add(btnTest);
-
-        layout.Controls.Add(testRow, 0, layout.RowCount);
-        layout.SetColumnSpan(testRow, 2);
+        AddFullRow(layout, testRow);
 
         _lblConnTestResult = new Label { Text = "", AutoSize = true, ForeColor = UITheme.TextDim, Margin = new Padding(2, 0, 0, 6) };
-        layout.Controls.Add(_lblConnTestResult, 0, layout.RowCount);
-        layout.SetColumnSpan(_lblConnTestResult, 2);
+        AddFullRow(layout, _lblConnTestResult);
 
         // ── Power control (operational, calls the local REST API) ──────────
-        var sep_pwr = new Label { Text = "───── ПИТАНИЕ ТАБЛО ─────", ForeColor = Color.Gray, Height = 20 };
-        layout.Controls.Add(sep_pwr, 0, layout.RowCount);
-        layout.SetColumnSpan(sep_pwr, 2);
+        AddFullRow(layout, MakeDivider("ПИТАНИЕ ТАБЛО"));
 
         var powerRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
-        var btnOn = MakeButton("🔆 Включить", Color.FromArgb(0, 168, 132), Color.White);
+        var btnOn = MakeButton("🔆 Включить", Color.FromArgb(16, 163, 127), Color.White);
         btnOn.Width = 120;
-        var btnOff = MakeButton("⏻ Выключить", Color.FromArgb(170, 60, 70), Color.White);
+        var btnOff = MakeButton("⏻ Выключить", UITheme.Danger, Color.White);
         btnOff.Width = 120;
         var btnReboot = MakeButton("↻ Перезагрузить", UITheme.Input, UITheme.Text);
         btnReboot.Width = 140;
@@ -993,19 +1015,33 @@ internal sealed class SettingsForm : Form
         btnOff.Click += (_, _) => _ = PowerAsync(false);
         btnReboot.Click += (_, _) => _ = RebootBoardAsync();
         powerRow.Controls.AddRange([btnOn, btnOff, btnReboot]);
-        layout.Controls.Add(powerRow, 0, layout.RowCount);
-        layout.SetColumnSpan(powerRow, 2);
+        AddFullRow(layout, powerRow);
 
         _lblPowerStatus = new Label { Text = "", AutoSize = true, ForeColor = UITheme.TextDim, Margin = new Padding(2, 0, 0, 4) };
-        layout.Controls.Add(_lblPowerStatus, 0, layout.RowCount);
-        layout.SetColumnSpan(_lblPowerStatus, 2);
+        AddFullRow(layout, _lblPowerStatus);
 
         // ── Controller family ──────────────────────────────────────────────
-        var grpCtrl = MakeGroupBox("Контроллер LED", layout);
+        AddFullRow(layout, MakeDivider("КОНТРОЛЛЕР LED"));
         AddRow(layout, "Семейство (подключение):", _cmbFamily);
 
         // Onbon fields
-        _lblIp = AddRow(layout, "IP-адрес контроллера: ", _txtIp);
+        // IP field + "detect" button: the button asks the running service to scan the
+        // board's own Wi-Fi (BoardLinkMonitor) and fills in the IP it finds (usually the
+        // AP's gateway, e.g. 192.168.43.1). Handy on-site: connect to the board AP, press this.
+        _btnDetectIp = MakeButton("🔍 Найти контроллер", Color.FromArgb(0, 150, 136), Color.White);
+        _btnDetectIp.Width = 220;
+        _btnDetectIp.Margin = new Padding(6, 0, 0, 0);
+        _btnDetectIp.Click += (_, _) => _ = DetectControllerIpAsync();
+        _pnlIp = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(0),
+            WrapContents = false,
+        };
+        _pnlIp.Controls.Add(_txtIp);
+        _pnlIp.Controls.Add(_btnDetectIp);
+        _lblIp = AddRow(layout, "IP-адрес контроллера: ", _pnlIp);
         _lblCtrlPort = AddRow(layout, "Порт контроллера:", _numCtrlPort);
          AddRow(layout, "Wi-Fi SSID табло:", _txtWifiSsid);
         _lblModel = AddRow(layout, "Модель контроллера:", _cmbModel);
@@ -1015,9 +1051,7 @@ internal sealed class SettingsForm : Form
         _cmbFamily.SelectedIndexChanged += (_, _) => ApplyFamilyVisibility();
 
         // ── FTP ─────────────────────────────────────────────────────────
-        var sep1 = new Label { Text = "───── FTP ─────", ForeColor = Color.Gray, Height = 20 };
-        layout.Controls.Add(sep1, 0, layout.RowCount);
-        layout.SetColumnSpan(sep1, 2);
+        AddFullRow(layout, MakeDivider("FTP"));
 
         AddRow(layout, "FTP пользователь:", _txtFtpUser);
         AddRow(layout, "FTP пароль:", _txtFtpPass);
@@ -1025,13 +1059,11 @@ internal sealed class SettingsForm : Form
         AddRow(layout, "", _chkTls);
 
         // ── API ──────────────────────────────────────────────────────────
-        var sep2 = new Label { Text = "───── API ─────", ForeColor = Color.Gray, Height = 20 };
-        layout.Controls.Add(sep2, 0, layout.RowCount);
-        layout.SetColumnSpan(sep2, 2);
+        AddFullRow(layout, MakeDivider("API"));
 
         AddRow(layout, "URL API курсов:", _txtRatesUrl);
         AddRow(layout, "URL перезагрузки:", _txtReloadUrl);
-        AddRow(layout, "Порт REST API:", _txtApiPort);
+        AddRow(layout, "Адрес сервиса (URL):", _txtApiPort);
 
         scroll.Controls.Add(layout);
         tab.Controls.Add(scroll);
@@ -1047,6 +1079,40 @@ internal sealed class SettingsForm : Form
 
         _lblConnTestResult.Text = (isOnline ? "✓ Онлайн  " : "✗ Оффлайн  ") + details;
         _lblConnTestResult.ForeColor = isOnline ? UITheme.Accent : Color.Salmon;
+    }
+
+    // Asks the running service to scan the board's own Wi-Fi for the controller and fills
+    // the IP field with what it finds (BoardLinkMonitor). Handy on-site: connect to the
+    // board AP, press this.
+    private async Task DetectControllerIpAsync()
+    {
+        _btnDetectIp.Enabled = false;
+        _lblConnTestResult.ForeColor = Color.LightGray;
+        _lblConnTestResult.Text = "Ищу контроллер в сети табло…";
+        try
+        {
+            var (ok, ip, message) = await LedControlClient.DetectControllerIpAsync(_cfg.Urls);
+            if (!string.IsNullOrWhiteSpace(ip))
+            {
+                _txtIp.Text = ip;
+                _lblConnTestResult.ForeColor = UITheme.Accent;
+                _lblConnTestResult.Text = $"✓ Контроллер найден: {ip}. {message} (не забудьте «Сохранить»)";
+            }
+            else
+            {
+                _lblConnTestResult.ForeColor = ok ? UITheme.Accent : Color.Salmon;
+                _lblConnTestResult.Text = (ok ? "✓ " : "✗ ") + message;
+            }
+        }
+        catch (Exception ex)
+        {
+            _lblConnTestResult.ForeColor = Color.Salmon;
+            _lblConnTestResult.Text = $"Ошибка поиска: {ex.Message}";
+        }
+        finally
+        {
+            _btnDetectIp.Enabled = true;
+        }
     }
 
     // When a known model is picked, auto-fill the device code and lock the field.
@@ -1353,7 +1419,7 @@ internal sealed class SettingsForm : Form
     //   "- "   → bullet
     //   "1." …  → kept as-is (numbered step)
     //   blank  → spacing
-    private static void RenderWikiMarkup(RichTextBox rtb, string title, string body)
+    internal static void RenderWikiMarkup(RichTextBox rtb, string title, string body)
     {
         rtb.Clear();
 
@@ -1587,7 +1653,7 @@ internal sealed class SettingsForm : Form
             ## API
             - URL API курсов — откуда брать курсы.
             - URL перезагрузки — адрес для перезагрузки контента.
-            - Порт REST API — локальный адрес сервиса (для превью, журнала,
+            - Адрес сервиса (URL) — локальный адрес сервиса (для превью, журнала,
               питания).
             """),
 
@@ -1646,7 +1712,17 @@ internal sealed class SettingsForm : Form
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
+    private bool _populatingForm;
+
     private void PopulateForm()
+    {
+        if (_populatingForm) return;
+        _populatingForm = true;
+        try { PopulateFormCore(); }
+        finally { _populatingForm = false; }
+    }
+
+    private void PopulateFormCore()
     {
         // Point
         var idx = _cmbPoint.Items.IndexOf(_cfg.ActivePointId);
@@ -1735,6 +1811,10 @@ internal sealed class SettingsForm : Form
         SyncDesignNumericsFromConfig();
         _editor.SetBackground(null);
         _editor.Bind(_cfg);
+
+        // Programmatically setting NumericUpDown.Value resets its internal TextBox to the
+        // system default colors — re-apply the theme so it doesn't flash white.
+        UITheme.Apply(this);
     }
 
     private void PullCurrencies()
@@ -1837,8 +1917,27 @@ internal sealed class SettingsForm : Form
         return $"{code}  {name}";
     }
 
-    private static NumericUpDown MakeNumeric(int min, int max)
-        => new() { Minimum = min, Maximum = max, Width = 100 };
+    private static NumericStepper MakeNumeric(int min, int max)
+        => new() { Minimum = min, Maximum = max, Width = 118, Height = 32 };
+
+    // A clean section divider: uppercased caption followed by a hairline rule.
+    private static Label MakeDivider(string text)
+    {
+        var lbl = new Label
+        {
+            Text = text,
+            ForeColor = UITheme.TextDim,
+            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold),
+            AutoSize = false,
+            Height = 26,
+            Width = 400,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
+            Margin = new Padding(0, 14, 0, 6),
+        };
+        UITheme.PaintDivider(lbl);
+        return lbl;
+    }
 
     private static Button MakeButton(string text, Color bg, Color fg)
     {
@@ -1859,13 +1958,6 @@ internal sealed class SettingsForm : Form
         btn.Width = 60;
         btn.Height = 26;
         return btn;
-    }
-
-    private static GroupBox MakeGroupBox(string text, Control parent)
-    {
-        var grp = new GroupBox { Text = text, Dock = DockStyle.Top, AutoSize = true };
-        parent.Controls.Add(grp);
-        return grp;
     }
 
     private static Label? AddRow(TableLayoutPanel tbl, string label, Control ctrl)
@@ -1892,6 +1984,19 @@ internal sealed class SettingsForm : Form
         return lbl;
     }
 
+    // Adds a control that spans both columns on its own row. Manages RowCount/RowStyles
+    // the same way AddRow does — mixing manual Controls.Add(…, 0, RowCount) with AddRow
+    // collides cells and scrambles the whole table, so every full-width add goes through here.
+    private static void AddFullRow(TableLayoutPanel tbl, Control ctrl)
+    {
+        int row = tbl.RowCount;
+        tbl.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        tbl.RowCount = row + 1;
+        ctrl.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        tbl.Controls.Add(ctrl, 0, row);
+        tbl.SetColumnSpan(ctrl, 2);
+    }
+
     // Show the Onbon controller rows. (This application supports the Onbon family only.)
     private void ApplyFamilyVisibility()
     {
@@ -1901,7 +2006,7 @@ internal sealed class SettingsForm : Form
             ctrl.Visible = true;
         }
 
-        Show(_lblIp, _txtIp);
+        Show(_lblIp, _pnlIp);
         Show(_lblCtrlPort, _numCtrlPort);
         Show(_lblModel, _cmbModel);
         Show(_lblDevice, _numDevice);

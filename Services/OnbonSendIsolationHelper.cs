@@ -72,10 +72,14 @@ internal static class OnbonSendIsolationHelper
             });
 
             var logStore = new InMemoryLogStore();
+            // Isolated helper: a fresh, empty BoardLinkState — this short-lived process
+            // doesn't share memory with the main process's BoardLinkMonitor, so it always
+            // sends to the configured ControllerIp (no runtime-detected override possible here).
             using var controller = new OnbonLedController(
                 loggerFactory.CreateLogger<OnbonLedController>(),
                 Options.Create(options),
-                logStore);
+                logStore,
+                new BoardLinkState());
 
             // The parent process already made the duplicate-skip decision before spawning
             // this helper; here we always send what we were handed.
