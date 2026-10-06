@@ -51,6 +51,8 @@ internal sealed class NumericStepper : Control
         _text.TextChanged += OnTextChanged;
         _text.Leave += (_, _) => NormalizeText();
         _text.Enter += (_, _) => Invalidate();
+        _text.KeyDown += OnKeyDown;
+        _text.MouseWheel += (_, e) => OnWheel(e.Delta);
 
         Controls.Add(_text);
         Controls.Add(_minus);
@@ -100,6 +102,30 @@ internal sealed class NumericStepper : Control
     {
         Value = _value + sign * _increment;
         if (!_text.Focused) Focus();
+    }
+
+    // ↑/↓ step by Increment, PgUp/PgDn by ten steps — like a web number input.
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        int steps = e.KeyCode switch
+        {
+            Keys.Up => 1,
+            Keys.Down => -1,
+            Keys.PageUp => 10,
+            Keys.PageDown => -10,
+            _ => 0,
+        };
+        if (steps == 0) return;
+        Value = _value + steps * _increment;
+        _text.SelectAll();
+        e.Handled = e.SuppressKeyPress = true;
+    }
+
+    // Wheel only while the field is focused, so scrolling a long page never changes values by accident.
+    private void OnWheel(int delta)
+    {
+        if (!_text.Focused || delta == 0) return;
+        Value = _value + Math.Sign(delta) * _increment;
     }
 
     private void OnKeyPress(object? sender, KeyPressEventArgs e)
@@ -162,8 +188,9 @@ internal sealed class NumericStepper : Control
         if (_text is null) return;   // children not built yet (during ctor sizing)
         int btn = Math.Min(30, Height);
         int h = Height;
-        _minus.SetBounds(0, 0, btn, h);
-        _plus.SetBounds(Width - btn, 0, btn, h);
+        // Inset by 2px so the square buttons don't cover the field's rounded corners/border.
+        _minus.SetBounds(2, 2, btn - 2, h - 4);
+        _plus.SetBounds(Width - btn, 2, btn - 2, h - 4);
 
         int textX = btn + 4;
         int textW = Width - 2 * btn - 8;
@@ -177,7 +204,8 @@ internal sealed class NumericStepper : Control
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        g.Clear(Parent?.BackColor ?? UITheme.Panel);
+        // No Clear(): the parent is often transparent, which cleared to black corners.
+        // SupportsTransparentBackColor already paints the parent's background behind us.
 
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
         using var path = RoundedButton.RoundedRect(rect, 8);
@@ -236,7 +264,8 @@ internal sealed class NumericStepper : Control
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent?.BackColor ?? UITheme.Input);
+            // Sits inside the rounded field — paint the field colour, not the (transparent) parent's.
+            g.Clear(Enabled ? UITheme.Input : UITheme.InputDisabled);
 
             Color glyphColor = !Enabled ? UITheme.TextDim
                 : _down ? UITheme.Accent

@@ -40,9 +40,26 @@ internal sealed class LayoutEditorControl : Panel
 
     public void SetBackground(Image? img)
     {
+        StopBackgroundAnimation();
         _background?.Dispose();
         _background = img;
+
+        // Ticker preview is an animated GIF — let GDI+ step its frames and repaint.
+        if (img != null && ImageAnimator.CanAnimate(img))
+            ImageAnimator.Animate(img, OnBackgroundFrameChanged);
         Invalidate();
+    }
+
+    private void OnBackgroundFrameChanged(object? sender, EventArgs e)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        try { BeginInvoke(Invalidate); } catch (InvalidOperationException) { /* closing */ }
+    }
+
+    private void StopBackgroundAnimation()
+    {
+        if (_background != null && ImageAnimator.CanAnimate(_background))
+            ImageAnimator.StopAnimate(_background, OnBackgroundFrameChanged);
     }
 
     // ─── Block model ──────────────────────────────────────────────────────────
@@ -177,7 +194,10 @@ internal sealed class LayoutEditorControl : Panel
             g.FillRectangle(bg, canvasRect);
 
         if (_background != null)
+        {
+            ImageAnimator.UpdateFrames(_background);
             g.DrawImage(_background, canvasRect);
+        }
 
         // Canvas border
         using (var pen = new Pen(Color.FromArgb(90, 90, 90)))
@@ -409,7 +429,11 @@ internal sealed class LayoutEditorControl : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _background?.Dispose();
+        if (disposing)
+        {
+            StopBackgroundAnimation();
+            _background?.Dispose();
+        }
         base.Dispose(disposing);
     }
 }

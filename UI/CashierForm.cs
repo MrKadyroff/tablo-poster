@@ -171,6 +171,26 @@ internal sealed class CashierForm : Form
         _btnSend.Location = new Point(12, 64);
         _btnSend.Click += async (_, _) => await SendToBoardAsync();
 
+        var tips = new ToolTip();
+        tips.SetToolTip(_btnRefresh, "Скачать свежие курсы и перерисовать табло (F5)");
+        tips.SetToolTip(_btnSend, "Отправить текущую картинку на табло (Ctrl+Enter)");
+
+        // Keyboard: F5 — refresh rates, Ctrl+Enter — send. Ignored while an action is running.
+        KeyPreview = true;
+        KeyDown += async (_, e) =>
+        {
+            if (e.KeyCode == Keys.F5 && _btnRefresh.Enabled)
+            {
+                e.Handled = true;
+                await RefreshRatesAsync();
+            }
+            else if (e.Control && e.KeyCode == Keys.Enter && _btnSend.Enabled)
+            {
+                e.Handled = e.SuppressKeyPress = true;
+                await SendToBoardAsync();
+            }
+        };
+
         // ─── Power control (secondary, with confirmation) ──────────────────
         // Kept small and visually separate from the big send button so cashiers
         // do not turn the screen on/off by accident.
@@ -392,11 +412,19 @@ internal sealed class CashierForm : Form
             var latest = Directory.GetFiles(dir, "*.*")
                 .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
                          || f.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
-                         || f.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase))
+                         || f.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase)
+                         || f.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(File.GetLastWriteTimeUtc)
                 .FirstOrDefault();
             if (latest == null) return;
-            using var loaded = Image.FromStream(new MemoryStream(File.ReadAllBytes(latest)));
+            var bytes = File.ReadAllBytes(latest);
+            // GIF (ticker) stays a stream-backed image so the PictureBox animates it.
+            if (latest.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+            {
+                SetPreview(Image.FromStream(new MemoryStream(bytes)));
+                return;
+            }
+            using var loaded = Image.FromStream(new MemoryStream(bytes));
             SetPreview(new Bitmap(loaded));
         }
         catch { }

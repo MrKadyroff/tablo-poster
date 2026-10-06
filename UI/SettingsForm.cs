@@ -33,6 +33,19 @@ internal sealed class SettingsForm : Form
     // Per-column X placement (free column layout, e.g. centred logo with rates on both sides)
     private readonly NumericStepper[] _numColX = new NumericStepper[MaxColumns];
     private CheckBox _chkManualColX = null!;
+    // Ticker (бегущая строка)
+    private CheckBox _chkTicker = null!;
+    private TrackBar _trkTickerSpeed = null!;
+    private NumericStepper _numTickerH = null!, _numTickerFont = null!;
+    private Button _btnTickerBg = null!, _btnTickerFg = null!;
+    private FlowLayoutPanel _pnlTickerPresets = null!;
+    private CheckBox _chkShine = null!;
+    private NumericStepper _numShineCount = null!;
+    private TrackBar _trkShineStrength = null!, _trkShineWidth = null!;
+    private Label _lblShineStrength = null!, _lblShineWidth = null!;
+    private Button _btnShineReset = null!;
+    private Label _lblTickerSpeed = null!, _lblTickerText = null!;
+    private Button _btnTickerText = null!;
     private bool _suppressSync;
     private TabControl _tabs = null!;
     private TabPage _designTab = null!;
@@ -91,6 +104,8 @@ internal sealed class SettingsForm : Form
         InitializeComponent();
         _cfg = AppSettingsManager.Load();
         PopulateForm();
+        AttachChangeTracking(this);
+        _changeTrackingAttached = true;
     }
 
     private void InitializeComponent()
@@ -104,9 +119,13 @@ internal sealed class SettingsForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = true;
         Icon = TrayApplicationContext.CreateAppIcon();
+        KeyPreview = true;
+        KeyDown += OnFormKeyDown;
         FormClosing += (_, e) =>
         {
+            // The window is reused from the tray — never really close it, just hide.
             e.Cancel = true;
+            if (e.CloseReason == CloseReason.UserClosing && !ConfirmDiscardChanges()) return;
             Hide();
         };
 
@@ -183,6 +202,22 @@ internal sealed class SettingsForm : Form
         _cmbPoint.Items.AddRange(AppSettingsManager.GetAvailablePoints());
         _cmbPoint.SelectedIndexChanged += (_, _) =>
         {
+            if (_revertingPoint) return;
+            // Switching the point reloads everything — don't silently lose edits.
+            if (!_populatingForm && _dirty
+                && _cmbPoint.SelectedItem?.ToString() != _cfg.ActivePointId)
+            {
+                var answer = MessageBox.Show(this,
+                    $"Есть несохранённые изменения для точки «{_cfg.ActivePointId}».\n\nСохранить их перед переключением?",
+                    "eCash Tablo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (answer == DialogResult.Cancel || (answer == DialogResult.Yes && !SaveOnly()))
+                {
+                    _revertingPoint = true;
+                    _cmbPoint.SelectedItem = _cfg.ActivePointId;
+                    _revertingPoint = false;
+                    return;
+                }
+            }
             _cfg.ActivePointId = _cmbPoint.SelectedItem?.ToString() ?? _cfg.ActivePointId;
             var newCfg = AppSettingsManager.Load();
             newCfg.ActivePointId = _cfg.ActivePointId;
@@ -192,24 +227,41 @@ internal sealed class SettingsForm : Form
         pointRow.Controls.AddRange([lblPoint, _cmbPoint]);
 
         // ─── Tab control ───────────────────────────────────────────────────
-        var tabs = new TabControl { Dock = DockStyle.Fill, Font = UIFont };
+        // Pages are switched from the grouped side menu; the tab strip itself is hidden.
+        var tabs = new HeaderlessTabControl { Dock = DockStyle.Fill, Font = UIFont };
         _tabs = tabs;
-        UITheme.StyleTabs(tabs);
-        tabs.TabPages.Add(BuildCurrenciesTab());
-        tabs.TabPages.Add(BuildHeadersTab());
-        tabs.TabPages.Add(BuildDisplayTab());
+        var pgCurrencies = BuildCurrenciesTab();
+        var pgHeaders = BuildHeadersTab();
+        var pgDisplay = BuildDisplayTab();
         _designTab = BuildDesignTab();
-        tabs.TabPages.Add(_designTab);
-        tabs.TabPages.Add(BuildServiceTab());
-        tabs.TabPages.Add(BuildConnectionTab());
-        tabs.TabPages.Add(BuildAdvancedTab());
-        tabs.TabPages.Add(BuildLogTab());
-        tabs.TabPages.Add(BuildWikiTab());
+        var pgService = BuildServiceTab();
+        var pgConnection = BuildConnectionTab();
+        var pgAdvanced = BuildAdvancedTab();
+        var pgLog = BuildLogTab();
+        var pgWiki = BuildWikiTab();
+        tabs.TabPages.AddRange([pgCurrencies, pgHeaders, pgDisplay, _designTab,
+                                pgService, pgConnection, pgAdvanced, pgLog, pgWiki]);
         tabs.SelectedIndexChanged += (_, _) =>
         {
             if (tabs.SelectedTab == _designTab)
                 EnterDesignTab();
+            if (tabs.SelectedTab == pgLog)
+                _ = RefreshLogAsync();
         };
+
+        var nav = new SideNav(tabs);
+        nav.AddGroup("ТАБЛО");
+        nav.AddItem("", "Валюты", pgCurrencies, "Ctrl+1");
+        nav.AddItem("", "Заголовки", pgHeaders, "Ctrl+2");
+        nav.AddItem("", "Размер табло", pgDisplay, "Ctrl+3");
+        nav.AddItem("", "Дизайн", _designTab, "Ctrl+4");
+        nav.AddGroup("СИСТЕМА");
+        nav.AddItem("", "Сервис", pgService, "Ctrl+5");
+        nav.AddItem("", "Подключение", pgConnection, "Ctrl+6");
+        nav.AddItem("", "Дополнительно", pgAdvanced, "Ctrl+7");
+        nav.AddGroup("СПРАВКА");
+        nav.AddItem("", "Журнал", pgLog, "Ctrl+8");
+        nav.AddItem("", "Вики", pgWiki, "Ctrl+9");
 
         // ─── Footer ────────────────────────────────────────────────────────
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 60, BackColor = UITheme.Panel, Padding = new Padding(16, 11, 16, 11) };
@@ -223,39 +275,39 @@ internal sealed class SettingsForm : Form
         btnSaveRestart.Location = new Point(16, 11);
         btnSaveRestart.Width = 248;
         btnSaveRestart.Height = 38;
-        btnSaveRestart.Click += (_, _) =>
-        {
-            if (CollectForm())
-            {
-                AppSettingsManager.Save(_cfg);
-                Hide();
-                _onRestart();
-            }
-        };
+        btnSaveRestart.Click += (_, _) => SaveAndRestart();
+        new ToolTip().SetToolTip(btnSaveRestart, "Сохранить и сразу применить (Ctrl+Shift+S)");
 
         var btnSave = MakeButton("💾  Сохранить", Color.FromArgb(16, 163, 127), Color.White);
         btnSave.Location = new Point(272, 11);
         btnSave.Width = 132;
         btnSave.Height = 38;
-        btnSave.Click += (_, _) =>
-        {
-            if (CollectForm())
-            {
-                AppSettingsManager.Save(_cfg);
-                MessageBox.Show("Настройки сохранены.\nПерезапустите сервис для применения изменений.",
-                    "eCash Tablo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-        };
+        btnSave.Click += (_, _) => SaveOnly();
+        new ToolTip().SetToolTip(btnSave, "Сохранить без перезапуска (Ctrl+S)");
 
         var btnClose = MakeButton("Закрыть", UITheme.Input, UITheme.Text);
         btnClose.Location = new Point(412, 11);
         btnClose.Width = 100;
         btnClose.Height = 38;
-        btnClose.Click += (_, _) => Hide();
+        btnClose.Click += (_, _) => Close();
+        new ToolTip().SetToolTip(btnClose, "Закрыть окно (Esc)");
 
-        footer.Controls.AddRange([btnSaveRestart, btnSave, btnClose]);
+        // Save status / unsaved-changes indicator, right of the buttons.
+        _lblSaveState = new Label
+        {
+            AutoSize = false,
+            Location = new Point(526, 11),
+            Size = new Size(380, 38),
+            Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = UITheme.TextDim,
+            Font = new Font("Segoe UI", 9f),
+        };
+
+        footer.Controls.AddRange([btnSaveRestart, btnSave, btnClose, _lblSaveState]);
 
         Controls.Add(tabs);
+        Controls.Add(nav);
         Controls.Add(pointRow);
         Controls.Add(header);
         Controls.Add(footer);
@@ -274,7 +326,7 @@ internal sealed class SettingsForm : Form
 
         var note = new Label
         {
-            Text = "Выберите валюты. Порядок в списке — порядок на табло. Выберите валюту слева, укажите колонку и нажмите «Добавить».",
+            Text = "Двойной клик: слева — добавить, справа — убрать (Delete). Порядок в колонке = порядок на табло.",
             Dock = DockStyle.Top,
             Height = 24,
             ForeColor = UITheme.TextDim,
@@ -293,17 +345,25 @@ internal sealed class SettingsForm : Form
         strip.Controls.AddRange([lblCols, _numColumnCount, lblTarget, _cmbAddTarget]);
 
         // All currencies panel (left side)
-        var grpAll = new CardBox { Text = "Все доступные", Dock = DockStyle.Left, Width = 210 };
-        var lstAll = new ListBox { Dock = DockStyle.Fill, Font = UIFont, SelectionMode = SelectionMode.MultiExtended };
+        var grpAll = new CardBox { Text = "Все доступные", Dock = DockStyle.Left, Width = 230 };
+        var lstAll = new ListBox { Dock = DockStyle.Fill, Font = UIFont, SelectionMode = SelectionMode.MultiExtended, IntegralHeight = false };
+        // Search field above the list: filters by code or name as you type.
+        var txtSearch = new TextBox { Dock = DockStyle.Top, Font = UIFont, PlaceholderText = "🔍  Поиск: USD, евро…", Tag = NoTrackTag };
+        var searchGap = new Panel { Dock = DockStyle.Top, Height = 10 };
         grpAll.Controls.Add(lstAll);
+        grpAll.Controls.Add(searchGap);
+        grpAll.Controls.Add(txtSearch);
 
         // Add/remove buttons
-        var btnPanel = new Panel { Dock = DockStyle.Left, Width = 80 };
-        var btnAdd = MakeArrow("→ Доб", UITheme.Accent2, Color.White);
-        btnAdd.Location = new Point(10, 44);
-        var btnRem = MakeArrow("← Уб", UITheme.Danger, Color.White);
-        btnRem.Location = new Point(10, 86);
+        var btnPanel = new Panel { Dock = DockStyle.Left, Width = 132 };
+        var btnAdd = MakeButton("Добавить  →", UITheme.Accent2, Color.White);
+        btnAdd.SetBounds(12, 52, 108, 34);
+        var btnRem = MakeButton("←  Убрать", UITheme.Danger, Color.White);
+        btnRem.SetBounds(12, 94, 108, 34);
         btnPanel.Controls.AddRange([btnAdd, btnRem]);
+        var tips = new ToolTip();
+        tips.SetToolTip(btnAdd, "Добавить выбранные валюты в колонку (или двойной клик / Enter)");
+        tips.SetToolTip(btnRem, "Убрать выбранные валюты из колонок (или Delete)");
 
         // Column listboxes host
         var columnsHost = new Panel { Dock = DockStyle.Fill };
@@ -316,7 +376,14 @@ internal sealed class SettingsForm : Form
                 Dock = idx == 0 ? DockStyle.Fill : DockStyle.Left,
                 Width = 150,
             };
-            var lst = new ListBox { Dock = DockStyle.Fill, Font = UIFont };
+            var lst = new ListBox { Dock = DockStyle.Fill, Font = UIFont, IntegralHeight = false };
+            lst.DoubleClick += (_, _) => RemoveSelectedFromColumns();
+            lst.KeyDown += (_, e) =>
+            {
+                if (e.KeyCode == Keys.Delete) { RemoveSelectedFromColumns(); e.Handled = true; }
+                else if (e.Alt && e.KeyCode == Keys.Up) { MoveItem(lst, -1); e.Handled = true; }
+                else if (e.Alt && e.KeyCode == Keys.Down) { MoveItem(lst, 1); e.Handled = true; }
+            };
             var upDown = MakeUpDownPanel(lst);
             grp.Controls.Add(lst);
             grp.Controls.Add(upDown);
@@ -329,30 +396,51 @@ internal sealed class SettingsForm : Form
         var allCurrencies = AppSettingsManager.GetAvailableCurrencies();
         if (allCurrencies.Length == 0)
             allCurrencies = AppSettingsManager.KnownCurrencies.Keys.ToArray();
-        foreach (var code in allCurrencies.Union(AppSettingsManager.KnownCurrencies.Keys).Distinct().OrderBy(c => c))
-        {
-            var name = AppSettingsManager.KnownCurrencies.TryGetValue(code, out var n) ? n : code;
-            lstAll.Items.Add($"{code}  {name}");
-        }
+        var allItems = allCurrencies.Union(AppSettingsManager.KnownCurrencies.Keys).Distinct().OrderBy(c => c)
+            .Select(code => $"{code}  {(AppSettingsManager.KnownCurrencies.TryGetValue(code, out var n) ? n : code)}")
+            .ToList();
+        lstAll.Items.AddRange([.. allItems]);
 
-        btnAdd.Click += (_, _) =>
+        txtSearch.TextChanged += (_, _) =>
+        {
+            var q = txtSearch.Text.Trim();
+            lstAll.BeginUpdate();
+            lstAll.Items.Clear();
+            lstAll.Items.AddRange([.. allItems.Where(i => q.Length == 0
+                || i.Contains(q, StringComparison.CurrentCultureIgnoreCase))]);
+            lstAll.EndUpdate();
+            if (lstAll.Items.Count == 1) lstAll.SelectedIndex = 0;
+        };
+        // Enter in the search box adds the (single / selected) match right away.
+        txtSearch.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Down && lstAll.Items.Count > 0) { lstAll.Focus(); lstAll.SelectedIndex = 0; e.Handled = true; }
+            if (e.KeyCode != Keys.Enter) return;
+            if (lstAll.SelectedItems.Count == 0 && lstAll.Items.Count > 0) lstAll.SelectedIndex = 0;
+            AddSelected();
+            txtSearch.SelectAll();
+            e.Handled = e.SuppressKeyPress = true;
+        };
+
+        void AddSelected()
         {
             int target = Math.Clamp((_cmbAddTarget.SelectedIndex >= 0 ? _cmbAddTarget.SelectedIndex : 0), 0, (int)_numColumnCount.Value - 1);
             var lst = _lstColumns[target];
+            bool added = false;
             foreach (var item in lstAll.SelectedItems.Cast<string>())
             {
                 var code = item.Split(' ')[0];
-                if (!lst.Items.Cast<string>().Any(s => s.StartsWith(code)))
-                    lst.Items.Add(item);
+                if (lst.Items.Cast<string>().Any(s => s.Split(' ')[0] == code)) continue;
+                lst.Items.Add(item);
+                added = true;
             }
-        };
+            if (added) MarkDirty();
+        }
 
-        btnRem.Click += (_, _) =>
-        {
-            foreach (var lst in _lstColumns)
-                foreach (var item in lst.SelectedItems.Cast<string>().ToList())
-                    lst.Items.Remove(item);
-        };
+        btnAdd.Click += (_, _) => AddSelected();
+        lstAll.DoubleClick += (_, _) => AddSelected();
+        lstAll.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { AddSelected(); e.Handled = e.SuppressKeyPress = true; } };
+        btnRem.Click += (_, _) => RemoveSelectedFromColumns();
 
         var mainPanel = new Panel { Dock = DockStyle.Fill };
         mainPanel.Controls.Add(columnsHost);
@@ -436,18 +524,21 @@ internal sealed class SettingsForm : Form
         return tab;
     }
 
-    private static Panel MakeUpDownPanel(ListBox lst)
+    private Panel MakeUpDownPanel(ListBox lst)
     {
-        var pnl = new Panel { Dock = DockStyle.Bottom, Height = 30 };
-        var btnUp = new RoundedButton { Text = "▲", Width = 34, Height = 26, Location = new Point(2, 2), BackColor = UITheme.Input, ForeColor = UITheme.Text, CornerRadius = 7 };
-        var btnDn = new RoundedButton { Text = "▼", Width = 34, Height = 26, Location = new Point(38, 2), BackColor = UITheme.Input, ForeColor = UITheme.Text, CornerRadius = 7 };
+        var pnl = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(0, 8, 0, 0) };
+        var btnUp = new RoundedButton { Text = "▲  Выше", Width = 92, Height = 30, Location = new Point(0, 10), BackColor = UITheme.Input, ForeColor = UITheme.Text, CornerRadius = 7 };
+        var btnDn = new RoundedButton { Text = "▼  Ниже", Width = 92, Height = 30, Location = new Point(98, 10), BackColor = UITheme.Input, ForeColor = UITheme.Text, CornerRadius = 7 };
         btnUp.Click += (_, _) => MoveItem(lst, -1);
         btnDn.Click += (_, _) => MoveItem(lst, 1);
+        var tips = new ToolTip();
+        tips.SetToolTip(btnUp, "Поднять выбранную валюту (Alt+↑)");
+        tips.SetToolTip(btnDn, "Опустить выбранную валюту (Alt+↓)");
         pnl.Controls.AddRange([btnUp, btnDn]);
         return pnl;
     }
 
-    private static void MoveItem(ListBox lst, int dir)
+    private void MoveItem(ListBox lst, int dir)
     {
         var idx = lst.SelectedIndex;
         if (idx < 0) return;
@@ -457,6 +548,19 @@ internal sealed class SettingsForm : Form
         lst.Items.RemoveAt(idx);
         lst.Items.Insert(newIdx, item);
         lst.SelectedIndex = newIdx;
+        MarkDirty();
+    }
+
+    private void RemoveSelectedFromColumns()
+    {
+        bool removed = false;
+        foreach (var lst in _lstColumns)
+            foreach (var item in lst.SelectedItems.Cast<string>().ToList())
+            {
+                lst.Items.Remove(item);
+                removed = true;
+            }
+        if (removed) MarkDirty();
     }
 
     // ─── Tab: Табло ───────────────────────────────────────────────────────────
@@ -464,16 +568,29 @@ internal sealed class SettingsForm : Form
     private TabPage BuildDisplayTab()
     {
         var tab = new TabPage("Размер табло") { Padding = new Padding(16) };
-        var grp = new CardBox { Text = "Размер холста (пикселей)", Dock = DockStyle.Top, Height = 130, Padding = new Padding(16, 36, 16, 14) };
+        var grp = new CardBox { Text = "Размер холста (пикселей)", Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 38, 16, 14) };
 
         _numW = MakeNumeric(8, 4096);
         _numH = MakeNumeric(8, 4096);
 
-        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, AutoSize = true };
+        var rows = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, AutoSize = true };
         rows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         AddRow(rows, "Ширина (px):", _numW);
         AddRow(rows, "Высота (px):", _numH);
+
+        // One-click presets for the boards already in use.
+        var presets = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 10, 0, 0) };
+        presets.Controls.Add(new Label { Text = "Типовые:", AutoSize = true, ForeColor = UITheme.TextDim, Margin = new Padding(0, 9, 8, 0) });
+        foreach (var (w, h) in new[] { (128, 160), (128, 256), (320, 400), (560, 80) })
+        {
+            var b = MakeButton($"{w} × {h}", UITheme.Input, UITheme.Text);
+            b.Width = 96;
+            b.Margin = new Padding(0, 2, 8, 2);
+            b.Click += (_, _) => { _numW.Value = w; _numH.Value = h; };
+            presets.Controls.Add(b);
+        }
+        AddFullRow(rows, presets);
 
         grp.Controls.Add(rows);
 
@@ -499,6 +616,7 @@ internal sealed class SettingsForm : Form
         _editor = new LayoutEditorControl { Dock = DockStyle.Fill };
         _editor.GeometryChanged += (_, _) =>
         {
+            MarkDirty();
             SyncDesignNumericsFromConfig();
             ScheduleLivePreview();
         };
@@ -583,6 +701,7 @@ internal sealed class SettingsForm : Form
         btnApi.Click += (_, _) => _ = FetchRatesAndPreviewAsync();
 
         _chkAutoPreview = SideCheck("Авто-обновление при правках");
+        _chkAutoPreview.Tag = NoTrackTag;   // view preference, not a setting
         _lblPreviewStatus = new Label { AutoSize = true, ForeColor = UITheme.TextDim, Text = "", Margin = new Padding(2, 2, 2, 2) };
 
         // ── Section: отправка на табло ─────────────────────────────────────────
@@ -662,6 +781,162 @@ internal sealed class SettingsForm : Form
         colxG.RowCount++;
         grpColX.Controls.Add(colxG);
 
+        // ── Бегущая строка — полоса сверху, табло рисуется как GIF ────────────
+        var grpTicker = NumCard("Бегущая строка");
+        var tickerG = NumGrid(); tickerG.Dock = DockStyle.Top;
+
+        void AddWide(Control c)
+        {
+            tickerG.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            tickerG.Controls.Add(c, 0, tickerG.RowCount);
+            tickerG.SetColumnSpan(c, 2);
+            tickerG.RowCount++;
+        }
+
+        _chkTicker = new CheckBox { Text = "Показывать бегущую строку", AutoSize = true, Margin = new Padding(3, 3, 3, 6) };
+        _chkTicker.CheckedChanged += (_, _) => OnTickerChanged();
+
+        _btnTickerText = MakeButton("✎  Текст строки…", UITheme.Input, UITheme.Text);
+        _btnTickerText.Height = 34;
+        _btnTickerText.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        _btnTickerText.Margin = new Padding(3, 2, 3, 3);
+        _btnTickerText.Click += (_, _) => EditTickerText();
+
+        _lblTickerText = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(textWrap - 30, 0),
+            ForeColor = UITheme.TextDim,
+            Font = new Font("Segoe UI", 8.5f),
+            Margin = new Padding(3, 2, 3, 6),
+        };
+
+        _lblTickerSpeed = new Label { AutoSize = true, ForeColor = UITheme.TextDim, Margin = new Padding(3, 4, 3, 0) };
+        _trkTickerSpeed = new TrackBar
+        {
+            Minimum = 5,               // tenths of a pixel per frame → 0.5 … 10
+            Maximum = 100,
+            TickFrequency = 5,
+            SmallChange = 1,
+            LargeChange = 5,
+            AutoSize = false,
+            Height = 34,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
+            BackColor = UITheme.Card,
+        };
+        _trkTickerSpeed.ValueChanged += (_, _) => OnTickerChanged();
+
+        AddWide(_chkTicker);
+        AddWide(_btnTickerText);
+        AddWide(_lblTickerText);
+        AddWide(_lblTickerSpeed);
+        AddWide(_trkTickerSpeed);
+
+        // Colours: pick the band and text colour, or a ready-made pair with one click.
+        _btnTickerBg = MakeButton("", UITheme.Input, UITheme.Text);
+        _btnTickerFg = MakeButton("", UITheme.Input, UITheme.Text);
+        _btnTickerBg.Width = _btnTickerFg.Width = 150;
+        _btnTickerBg.Height = _btnTickerFg.Height = 32;
+        _btnTickerBg.Click += (_, _) => PickTickerColor(background: true);
+        _btnTickerFg.Click += (_, _) => PickTickerColor(background: false);
+        AddRow(tickerG, "Цвет полосы:", _btnTickerBg);
+        AddRow(tickerG, "Цвет текста:", _btnTickerFg);
+
+        _pnlTickerPresets = new FlowLayoutPanel { AutoSize = true, WrapContents = true, MaximumSize = new Size(textWrap - 30, 0), Margin = new Padding(0, 2, 0, 4) };
+        var presetTips = new ToolTip();
+        foreach (var (name, bg, fg) in new[]
+        {
+            ("Оранжевый (eCash)", "#F58220", "#FFFFFF"),
+            ("Красный", "#D32F2F", "#FFFFFF"),
+            ("Синий", "#1F6FEB", "#FFFFFF"),
+            ("Зелёный", "#16A34A", "#FFFFFF"),
+            ("Чёрный с жёлтым", "#000000", "#FFD400"),
+            ("Белый", "#FFFFFF", "#111111"),
+        })
+        {
+            var b = MakeButton("Аа", ColorTranslator.FromHtml(bg), ColorTranslator.FromHtml(fg));
+            b.Width = 44; b.Height = 30;
+            b.Margin = new Padding(3, 3, 3, 3);
+            b.Click += (_, _) => { _cfg.TickerBgColor = bg; _cfg.TickerTextColor = fg; UpdateTickerUi(); MarkDirty(); ScheduleLivePreview(); };
+            presetTips.SetToolTip(b, name);
+            _pnlTickerPresets.Controls.Add(b);
+        }
+        AddWide(_pnlTickerPresets);
+
+        // Size: band height and text size. 0 = automatic.
+        _numTickerH = MakeNumeric(0, 1024);
+        _numTickerFont = MakeNumeric(0, 1024);
+        _numTickerH.ValueChanged += (_, _) => OnTickerChanged();
+        _numTickerFont.ValueChanged += (_, _) => OnTickerChanged();
+        AddRow(tickerG, "Высота полосы:", _numTickerH);
+        AddRow(tickerG, "Размер текста:", _numTickerFont);
+        AddWide(new Label
+        {
+            Text = "0 = авто (полоса ≈14 % высоты табло, текст — 72 % полосы). Размеры в пикселях табло. Крупный текст делает анимацию длиннее и тяжелее — на табло она грузится дольше.",
+            AutoSize = true,
+            MaximumSize = new Size(textWrap - 30, 0),
+            ForeColor = UITheme.TextDim,
+            Font = new Font("Segoe UI", 8.5f),
+            Margin = new Padding(3, 2, 3, 4),
+        });
+        grpTicker.Controls.Add(tickerG);
+
+        // ── Мерцание флагов — блик пробегает по нескольким флагам, табло рисуется как GIF ──
+        var grpShine = NumCard("Мерцание флагов");
+        var shineG = NumGrid(); shineG.Dock = DockStyle.Top;
+        _chkShine = new CheckBox { Text = "Блик на флагах (анимация)", AutoSize = true, Margin = new Padding(3, 3, 3, 6) };
+        _chkShine.CheckedChanged += (_, _) => OnShineChanged();
+
+        void AddShineWide(Control c)
+        {
+            shineG.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            shineG.Controls.Add(c, 0, shineG.RowCount);
+            shineG.SetColumnSpan(c, 2);
+            shineG.RowCount++;
+        }
+
+        TrackBar ShineTrack(int min, int max) => new()
+        {
+            Minimum = min,
+            Maximum = max,
+            TickFrequency = 10,
+            SmallChange = 1,
+            LargeChange = 10,
+            AutoSize = false,
+            Height = 34,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
+            BackColor = UITheme.Card,
+        };
+
+        _numShineCount = MakeNumeric(1, 12);
+        _numShineCount.ValueChanged += (_, _) => OnShineChanged();
+        _lblShineStrength = new Label { AutoSize = true, ForeColor = UITheme.TextDim, Margin = new Padding(3, 4, 3, 0) };
+        _trkShineStrength = ShineTrack(5, 100);
+        _trkShineStrength.ValueChanged += (_, _) => OnShineChanged();
+        _lblShineWidth = new Label { AutoSize = true, ForeColor = UITheme.TextDim, Margin = new Padding(3, 4, 3, 0) };
+        _trkShineWidth = ShineTrack(5, 100);
+        _trkShineWidth.ValueChanged += (_, _) => OnShineChanged();
+
+        _btnShineReset = MakeButton("↺  По умолчанию", UITheme.Input, UITheme.Text);
+        _btnShineReset.Height = 32;
+        _btnShineReset.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        _btnShineReset.Margin = new Padding(3, 6, 3, 3);
+        _btnShineReset.Click += (_, _) =>
+        {
+            _numShineCount.Value = 3;
+            _trkShineStrength.Value = 75;
+            _trkShineWidth.Value = 35;
+        };
+
+        AddShineWide(_chkShine);
+        AddRow(shineG, "Сколько флагов:", _numShineCount);
+        AddShineWide(_lblShineStrength);
+        AddShineWide(_trkShineStrength);
+        AddShineWide(_lblShineWidth);
+        AddShineWide(_trkShineWidth);
+        AddShineWide(_btnShineReset);
+        grpShine.Controls.Add(shineG);
+
         var hint = WrapHint("Перетаскивайте блоки мышью. Уголок выделенного блока — изменение размера. "
             + "«Обновить превью» рисует реальное изображение по текущим курсам.");
 
@@ -690,6 +965,9 @@ internal sealed class SettingsForm : Form
         AddSide(grpFlag);
         AddSide(grpRows);
         AddSide(grpColX);
+        AddSide(Caption("АНИМАЦИЯ"));
+        AddSide(grpTicker);
+        AddSide(grpShine);
         AddSide(hint, fill: false);
 
         side.Controls.Add(col);
@@ -835,7 +1113,170 @@ internal sealed class SettingsForm : Form
         SetNum(_numLogoH, _cfg.LogoH);
         SetNum(_numRowsStartY, _cfg.RowsStartY);
         SetNum(_numRowH, _cfg.RowH);
+        _chkTicker.Checked = _cfg.TickerEnabled;
+        _chkShine.Checked = _cfg.ShineEnabled;
+        SetNum(_numShineCount, _cfg.ShineCount);
+        _trkShineStrength.Value = Math.Clamp((int)Math.Round(_cfg.ShineStrength * 100), _trkShineStrength.Minimum, _trkShineStrength.Maximum);
+        _trkShineWidth.Value = Math.Clamp((int)Math.Round(_cfg.ShineWidth * 100), _trkShineWidth.Minimum, _trkShineWidth.Maximum);
+        UpdateShineUi();
+        _trkTickerSpeed.Value = Math.Clamp((int)Math.Round(_cfg.TickerSpeed * 10),
+            _trkTickerSpeed.Minimum, _trkTickerSpeed.Maximum);
+        SetNum(_numTickerH, _cfg.TickerH);
+        SetNum(_numTickerFont, _cfg.TickerFontSize);
+        UpdateTickerUi();
         _suppressSync = false;
+    }
+
+    private void OnShineChanged()
+    {
+        UpdateShineUi();
+        if (_suppressSync) return;
+        _cfg.ShineEnabled = _chkShine.Checked;
+        _cfg.ShineCount = (int)_numShineCount.Value;
+        _cfg.ShineStrength = _trkShineStrength.Value / 100.0;
+        _cfg.ShineWidth = _trkShineWidth.Value / 100.0;
+        ScheduleLivePreview();
+    }
+
+    private void UpdateShineUi()
+    {
+        bool on = _chkShine.Checked;
+        _numShineCount.Enabled = on;
+        _trkShineStrength.Enabled = on;
+        _trkShineWidth.Enabled = on;
+        _btnShineReset.Enabled = on;
+        _lblShineStrength.Text = $"Яркость блика: {_trkShineStrength.Value} %";
+        _lblShineWidth.Text = $"Ширина блика: {_trkShineWidth.Value} % флага";
+    }
+
+    // Swatch button: filled with the chosen colour, shows the hex code in a readable ink.
+    private static void PaintColorButton(Button btn, string hex)
+    {
+        Color c;
+        try { c = ColorTranslator.FromHtml(hex); } catch { c = Color.Gray; }
+        btn.BackColor = c;
+        btn.ForeColor = (c.R * 299 + c.G * 587 + c.B * 114) / 1000 > 150 ? Color.Black : Color.White;
+        btn.Text = hex.ToUpperInvariant();
+        btn.Invalidate();
+    }
+
+    private void PickTickerColor(bool background)
+    {
+        var current = background ? _cfg.TickerBgColor : _cfg.TickerTextColor;
+        using var dlg = new ColorDialog { FullOpen = true, AnyColor = true };
+        try { dlg.Color = ColorTranslator.FromHtml(current); } catch { }
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        var hex = $"#{dlg.Color.R:X2}{dlg.Color.G:X2}{dlg.Color.B:X2}";
+        if (background) _cfg.TickerBgColor = hex; else _cfg.TickerTextColor = hex;
+        UpdateTickerUi();
+        MarkDirty();
+        ScheduleLivePreview();
+    }
+
+    private void OnTickerChanged()
+    {
+        UpdateTickerUi();
+        if (_suppressSync) return;
+        _cfg.TickerEnabled = _chkTicker.Checked;
+        _cfg.TickerSpeed = _trkTickerSpeed.Value / 10.0;
+        _cfg.TickerH = (int)_numTickerH.Value;
+        _cfg.TickerFontSize = (int)_numTickerFont.Value;
+        ScheduleLivePreview();
+    }
+
+    private void UpdateTickerUi()
+    {
+        bool on = _chkTicker.Checked;
+        _trkTickerSpeed.Enabled = on;
+        _btnTickerText.Enabled = on;
+        _numTickerH.Enabled = on;
+        _btnTickerBg.Enabled = on;
+        _btnTickerFg.Enabled = on;
+        foreach (Control c in _pnlTickerPresets.Controls) c.Enabled = on;
+        PaintColorButton(_btnTickerBg, _cfg.TickerBgColor);
+        PaintColorButton(_btnTickerFg, _cfg.TickerTextColor);
+        _numTickerFont.Enabled = on;
+        _lblTickerSpeed.Text = $"Скорость: {_trkTickerSpeed.Value / 10.0:0.#} px/кадр";
+
+        var text = _cfg.TickerText?.Trim() ?? "";
+        _lblTickerText.Text = text.Length == 0
+            ? "Текст: «Обмен валют» на 6 языках (по умолчанию)"
+            : "Текст: " + (text.Length > 80 ? text[..80].Replace('\n', ' ') + "…" : text.Replace('\n', ' '));
+    }
+
+    // Dialog for the ticker message: one line = one message, separated by ★ on the board.
+    private void EditTickerText()
+    {
+        using var dlg = new Form
+        {
+            Text = "Текст бегущей строки",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ClientSize = new Size(520, 300),
+            BackColor = UITheme.Bg,
+            ForeColor = UITheme.Text,
+            Font = new Font("Segoe UI", 9.5f),
+        };
+
+        var info = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 54,
+            Padding = new Padding(12, 10, 12, 0),
+            ForeColor = UITheme.TextDim,
+            Text = "Каждая строка — отдельное сообщение, на табло они идут через «★».\n"
+                 + "Оставьте пустым — будет «Обмен валют» на 6 языках.",
+        };
+
+        var txt = new TextBox
+        {
+            Multiline = true,
+            ScrollBars = ScrollBars.Vertical,
+            AcceptsReturn = true,
+            Dock = DockStyle.Fill,
+            Text = (_cfg.TickerText ?? "").Replace("\r\n", "\n").Replace("\n", "\r\n"),
+        };
+        var txtHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 4, 12, 8) };
+        txtHost.Controls.Add(txt);
+
+        var btnOk = MakeButton("Сохранить", UITheme.Accent2, Color.White);
+        btnOk.Width = 120;
+        btnOk.DialogResult = DialogResult.OK;
+        var btnClear = MakeButton("Очистить", UITheme.Input, UITheme.Text);
+        btnClear.Width = 110;
+        btnClear.Click += (_, _) => txt.Clear();
+        var btnCancel = MakeButton("Отмена", UITheme.Input, UITheme.Text);
+        btnCancel.Width = 110;
+        btnCancel.DialogResult = DialogResult.Cancel;
+
+        var footer = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 52,
+            FlowDirection = FlowDirection.RightToLeft,
+            Padding = new Padding(8, 10, 8, 8),
+            BackColor = UITheme.Panel,
+        };
+        footer.Controls.AddRange([btnOk, btnCancel, btnClear]);
+
+        dlg.Controls.Add(txtHost);
+        dlg.Controls.Add(info);
+        dlg.Controls.Add(footer);
+        dlg.AcceptButton = null;          // Enter adds a new line in the text box
+        dlg.CancelButton = btnCancel;
+        UITheme.Apply(dlg);
+
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        MarkDirty();
+        _cfg.TickerText = string.Join("\n", txt.Lines
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0));
+        UpdateTickerUi();
+        ScheduleLivePreview();
     }
 
     private static void SetNum(NumericStepper n, int v)
@@ -924,7 +1365,7 @@ internal sealed class SettingsForm : Form
     private TabPage BuildServiceTab()
     {
         var tab = new TabPage("Сервис") { Padding = new Padding(12) };
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, AutoSize = true };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
@@ -942,16 +1383,25 @@ internal sealed class SettingsForm : Form
         _chkSkipUnchanged = new CheckBox { Text = "Пропускать без изменений", AutoSize = true };
         _chkForceCompose = new CheckBox { Text = "Перерисовывать каждый цикл", AutoSize = true };
 
+        AddFullRow(layout, MakeDivider("РЕЖИМ"));
         AddRow(layout, "Режим работы:", _cmbRunMode);
         AddRow(layout, "Режим публикации:", _cmbPublishMode);
+        AddFullRow(layout, MakeDivider("РАСПИСАНИЕ"));
         AddRow(layout, "Интервал опроса (сек):", _numPoll);
         AddRow(layout, "Обновление курсов (мин):", _numRatesFetch);
+        AddFullRow(layout, MakeDivider("ОТПРАВКА"));
         AddRow(layout, "", _chkLayout);
         AddRow(layout, "", _chkAutoSend);
         AddRow(layout, "", _chkSkipUnchanged);
         AddRow(layout, "", _chkForceCompose);
 
-        tab.Controls.Add(layout);
+        var tips = new ToolTip { AutoPopDelay = 15000 };
+        tips.SetToolTip(_cmbRunMode, "RenderOnly — только рисовать картинку; Uploader — только отправлять; Full — всё вместе");
+        tips.SetToolTip(_chkLayout, "Картинка рисуется, но на табло не отправляется — для проверки разметки");
+        tips.SetToolTip(_chkSkipUnchanged, "Не отправлять на табло, если курсы и картинка не изменились");
+        tips.SetToolTip(_chkForceCompose, "Перерисовывать картинку на каждом цикле, даже без изменений курсов");
+
+        tab.Controls.Add(WrapScroll(layout));
         return tab;
     }
 
@@ -1182,7 +1632,7 @@ internal sealed class SettingsForm : Form
     private TabPage BuildAdvancedTab()
     {
         var tab = new TabPage("Дополнительно") { Padding = new Padding(12) };
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, AutoSize = true };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
@@ -1199,13 +1649,16 @@ internal sealed class SettingsForm : Form
         _chkWifiOnly = new CheckBox { Text = "Только через Wi-Fi адаптер", AutoSize = true };
         _chkPrivate = new CheckBox { Text = "Требовать приватный IP", AutoSize = true };
 
+        AddFullRow(layout, MakeDivider("SDK КОНТРОЛЛЕРА"));
         AddRow(layout, "", _chkOnbonEnabled);
         AddRow(layout, "Логин SDK:", _txtOnbonUser);
         AddRow(layout, "Пароль SDK:", _txtOnbonPass);
+        AddFullRow(layout, MakeDivider("ПОВТОРЫ И ТАЙМАУТЫ"));
         AddRow(layout, "Повторных попыток:", _numRetry);
         AddRow(layout, "Задержка попытки (мс):", _numRetryMs);
         AddRow(layout, "Таймаут подключения (мс):", _numConnTimeout);
         AddRow(layout, "Интервал опроса SDK (сек):", _numOnbonPoll);
+        AddFullRow(layout, MakeDivider("ЗАЩИТА ОТПРАВКИ"));
         AddRow(layout, "", _chkIsolated);
         AddRow(layout, "", _chkSkipDup);
         AddRow(layout, "", _chkRejectSize);
@@ -1219,13 +1672,7 @@ internal sealed class SettingsForm : Form
         _btnTelegramTest.Width = 200;
         _btnTelegramTest.Click += async (_, _) => await SendTelegramTestAsync();
 
-        AddRow(layout, "", new Label
-        {
-            Text = "— Telegram-уведомления —",
-            AutoSize = true,
-            ForeColor = UITheme.Accent,
-            Padding = new Padding(0, 10, 0, 2),
-        });
+        AddFullRow(layout, MakeDivider("TELEGRAM-УВЕДОМЛЕНИЯ"));
         AddRow(layout, "", new Label
         {
             Text = "Token, Chat ID и включение задаются в appsettings.json (раздел \"Telegram\").",
@@ -1235,13 +1682,7 @@ internal sealed class SettingsForm : Form
         AddRow(layout, "", _btnTelegramTest);
 
         // ─── Обновление приложения ─────────────────────────────────────────
-        AddRow(layout, "", new Label
-        {
-            Text = "— Обновление приложения —",
-            AutoSize = true,
-            ForeColor = UITheme.Accent,
-            Padding = new Padding(0, 12, 0, 2),
-        });
+        AddFullRow(layout, MakeDivider("ОБНОВЛЕНИЕ ПРИЛОЖЕНИЯ"));
         AddRow(layout, "", new Label
         {
             Text = $"Текущая версия: v{UpdateService.CurrentVersion.ToString(3)}. " +
@@ -1258,8 +1699,17 @@ internal sealed class SettingsForm : Form
         };
         AddRow(layout, "", btnCheckUpdate);
 
-        tab.Controls.Add(layout);
+        tab.Controls.Add(WrapScroll(layout));
         return tab;
+    }
+
+    /// <summary>Puts a top-docked, auto-sized layout into a scrollable host so nothing is cut off.</summary>
+    private static Panel WrapScroll(Control content)
+    {
+        var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        content.Dock = DockStyle.Top;
+        scroll.Controls.Add(content);
+        return scroll;
     }
 
     /// <summary>
@@ -1314,22 +1764,43 @@ internal sealed class SettingsForm : Form
     {
         var tab = new TabPage("Журнал") { Padding = new Padding(8) };
 
-        var toolbar = new Panel { Dock = DockStyle.Top, Height = 32 };
-        var btnRefresh = MakeButton("Обновить журнал", Color.FromArgb(0, 102, 204), Color.White);
-        btnRefresh.Width = 160;
-        btnRefresh.Location = new Point(4, 4);
+        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, WrapContents = false, Padding = new Padding(0, 2, 0, 6) };
+        var btnRefresh = MakeButton("⟳  Обновить (F5)", UITheme.Accent2, Color.White);
+        btnRefresh.Width = 150;
         btnRefresh.Click += (_, _) => _ = RefreshLogAsync();
-        toolbar.Controls.Add(btnRefresh);
+
+        var btnCopy = MakeButton("⧉  Копировать", UITheme.Input, UITheme.Text);
+        btnCopy.Width = 130;
+        btnCopy.Click += (_, _) =>
+        {
+            if (string.IsNullOrEmpty(_rtbLog.Text)) return;
+            Clipboard.SetText(_rtbLog.Text);
+            _lblLogState.Text = "Скопировано в буфер обмена";
+        };
+
+        _chkLogErrorsOnly = new CheckBox { Text = "Только ошибки", AutoSize = true, Tag = NoTrackTag, Margin = new Padding(14, 9, 0, 0) };
+        _chkLogErrorsOnly.CheckedChanged += (_, _) => RenderLog();
+        _chkLogAuto = new CheckBox { Text = "Автообновление (5 сек)", AutoSize = true, Tag = NoTrackTag, Margin = new Padding(14, 9, 0, 0) };
+        _logTimer = new System.Windows.Forms.Timer { Interval = 5000 };
+        _logTimer.Tick += (_, _) => { if (Visible && _tabs.SelectedTab == tab) _ = RefreshLogAsync(); };
+        _chkLogAuto.CheckedChanged += (_, _) => _logTimer.Enabled = _chkLogAuto.Checked;
+
+        _lblLogState = new Label { AutoSize = true, ForeColor = UITheme.TextDim, Margin = new Padding(14, 11, 0, 0) };
+
+        foreach (var b in new Control[] { btnRefresh, btnCopy }) { b.Height = 34; b.Margin = new Padding(0, 0, 8, 0); }
+        toolbar.Controls.AddRange([btnRefresh, btnCopy, _chkLogErrorsOnly, _chkLogAuto, _lblLogState]);
 
         _rtbLog = new RichTextBox
         {
             Dock = DockStyle.Fill,
             ReadOnly = true,
-            BackColor = Color.FromArgb(15, 15, 15),
-            ForeColor = Color.LightGreen,
-            Font = new Font("Consolas", 8.5f),
+            BorderStyle = BorderStyle.None,
+            BackColor = UITheme.Panel,
+            ForeColor = UITheme.Text,
+            Font = new Font("Consolas", 9f),
             ScrollBars = RichTextBoxScrollBars.Both,
             WordWrap = false,
+            DetectUrls = false,
         };
 
         tab.Controls.Add(_rtbLog);
@@ -1337,20 +1808,73 @@ internal sealed class SettingsForm : Form
         return tab;
     }
 
+    private CheckBox _chkLogErrorsOnly = null!, _chkLogAuto = null!;
+    private Label _lblLogState = null!;
+    private System.Windows.Forms.Timer _logTimer = null!;
+    private List<LogLine> _logLines = [];
+    private bool _logLoading;
+
+    private sealed record LogLine(DateTimeOffset Timestamp, string Level, string Category, string Message);
+
     private async Task RefreshLogAsync()
     {
+        if (_logLoading) return;
+        _logLoading = true;
         try
         {
-            // Determine current API port from Urls setting
-            var uri = _cfg.Urls.TrimEnd('/') + "/api/led/logs?count=200";
+            var uri = _cfg.Urls.TrimEnd('/') + "/api/led/logs?count=300";
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
             var json = await http.GetStringAsync(uri);
-            _rtbLog.Text = json;
+            _logLines = System.Text.Json.JsonSerializer.Deserialize<List<LogLine>>(json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+            _lblLogState.ForeColor = UITheme.TextDim;
+            _lblLogState.Text = $"Обновлено {DateTime.Now:HH:mm:ss} · записей: {_logLines.Count}";
+            RenderLog();
         }
         catch (Exception ex)
         {
-            _rtbLog.Text = $"Не удалось загрузить журнал:\n{ex.Message}\n\nУбедитесь, что сервис запущен.";
+            _logLines = [];
+            _rtbLog.Clear();
+            _rtbLog.SelectionColor = Color.Salmon;
+            _rtbLog.AppendText($"Не удалось загрузить журнал: {ex.Message}\n\nУбедитесь, что сервис запущен (значок в трее).");
+            _lblLogState.ForeColor = Color.Salmon;
+            _lblLogState.Text = "Сервис недоступен";
         }
+        finally { _logLoading = false; }
+    }
+
+    // Newest first, one line per record, coloured by level so problems stand out.
+    private void RenderLog()
+    {
+        bool errorsOnly = _chkLogErrorsOnly.Checked;
+        var lines = _logLines
+            .Where(l => !errorsOnly || l.Level is "Warning" or "Error" or "Critical")
+            .OrderByDescending(l => l.Timestamp);
+
+        _rtbLog.SuspendLayout();
+        _rtbLog.Clear();
+        foreach (var l in lines)
+        {
+            var (tag, color) = l.Level switch
+            {
+                "Error" or "Critical" => ("ОШИБКА", Color.FromArgb(240, 97, 109)),
+                "Warning" => ("ВНИМ. ", Color.FromArgb(251, 191, 36)),
+                "Debug" or "Trace" => ("отладк", UITheme.TextDim),
+                _ => ("инфо  ", UITheme.Text),
+            };
+            _rtbLog.SelectionColor = UITheme.TextDim;
+            _rtbLog.AppendText($"{l.Timestamp.ToLocalTime():dd.MM HH:mm:ss}  ");
+            _rtbLog.SelectionColor = color;
+            _rtbLog.AppendText($"{tag}  {l.Message}\n");
+        }
+        if (_rtbLog.TextLength == 0)
+        {
+            _rtbLog.SelectionColor = UITheme.TextDim;
+            _rtbLog.AppendText(errorsOnly ? "Ошибок и предупреждений нет 👍" : "Журнал пуст.");
+        }
+        _rtbLog.SelectionStart = 0;
+        _rtbLog.ScrollToCaret();
+        _rtbLog.ResumeLayout();
     }
 
     // ─── Tab: Вики ────────────────────────────────────────────────────────────
@@ -1720,6 +2244,127 @@ internal sealed class SettingsForm : Form
         _populatingForm = true;
         try { PopulateFormCore(); }
         finally { _populatingForm = false; }
+        SetDirty(false);
+    }
+
+    // ─── Save / unsaved changes / shortcuts ───────────────────────────────────
+
+    private Label _lblSaveState = null!;
+    private bool _dirty;
+    private bool _revertingPoint;
+    private bool _changeTrackingAttached;
+
+    /// <summary>
+    /// Hooks every settings input so any edit flips the "unsaved changes" marker.
+    /// Controls that are view-only preferences (auto preview, log refresh…) are skipped.
+    /// </summary>
+    private void AttachChangeTracking(Control root)
+    {
+        foreach (Control c in root.Controls)
+        {
+            if (c.Tag as string == NoTrackTag || c == _cmbPoint) continue;
+            switch (c)
+            {
+                case NumericStepper n: n.ValueChanged += (_, _) => MarkDirty(); break;
+                case TextBox tb when !tb.ReadOnly: tb.TextChanged += (_, _) => MarkDirty(); break;
+                case CheckBox chk: chk.CheckedChanged += (_, _) => MarkDirty(); break;
+                case ComboBox cb: cb.SelectedIndexChanged += (_, _) => MarkDirty(); break;
+                case TrackBar tr: tr.ValueChanged += (_, _) => MarkDirty(); break;
+            }
+            if (c is not NumericStepper && c.HasChildren) AttachChangeTracking(c);
+        }
+    }
+
+    private const string NoTrackTag = "no-track";
+
+    private void MarkDirty()
+    {
+        if (_populatingForm || !_changeTrackingAttached) return;
+        SetDirty(true);
+    }
+
+    private void SetDirty(bool dirty)
+    {
+        _dirty = dirty;
+        if (_lblSaveState == null) return;
+        if (dirty)
+        {
+            _lblSaveState.ForeColor = Color.FromArgb(251, 191, 36);
+            _lblSaveState.Text = "●  Есть несохранённые изменения  (Ctrl+S — сохранить)";
+        }
+        else if (_lblSaveState.Text.StartsWith('●'))
+        {
+            _lblSaveState.Text = "";
+        }
+    }
+
+    private void ShowSaved(string text)
+    {
+        _lblSaveState.ForeColor = UITheme.Success;
+        _lblSaveState.Text = text;
+    }
+
+    private bool SaveOnly()
+    {
+        if (!CollectForm()) return false;
+        AppSettingsManager.Save(_cfg);
+        SetDirty(false);
+        ShowSaved($"✓  Сохранено в {DateTime.Now:HH:mm}. Применится после перезапуска сервиса.");
+        return true;
+    }
+
+    private void SaveAndRestart()
+    {
+        if (!CollectForm()) return;
+        AppSettingsManager.Save(_cfg);
+        SetDirty(false);
+        Hide();
+        _onRestart();
+    }
+
+    /// <summary>Asks what to do with unsaved edits. Returns false when the user cancels.</summary>
+    private bool ConfirmDiscardChanges()
+    {
+        if (!_dirty) return true;
+        var answer = MessageBox.Show(this,
+            "Есть несохранённые изменения.\n\nСохранить их?",
+            "eCash Tablo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        if (answer == DialogResult.Cancel) return false;
+        if (answer == DialogResult.Yes) return SaveOnly();
+        // "No": throw the edits away so the next open shows what is really saved.
+        _cfg = AppSettingsManager.Load();
+        PopulateForm();
+        return true;
+    }
+
+    private void OnFormKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Control && e.KeyCode == Keys.S)
+        {
+            if (e.Shift) SaveAndRestart(); else SaveOnly();
+            e.Handled = e.SuppressKeyPress = true;
+            return;
+        }
+        if (e.KeyCode == Keys.Escape && !e.Control && !e.Shift)
+        {
+            Close();
+            e.Handled = e.SuppressKeyPress = true;
+            return;
+        }
+        if (e.KeyCode == Keys.F5)
+        {
+            if (_tabs.SelectedTab == _designTab) _ = RenderPreviewAsync(silent: false);
+            else if (_tabs.SelectedIndex == 7) _ = RefreshLogAsync();
+            e.Handled = true;
+            return;
+        }
+        // Ctrl+1 … Ctrl+9 jump straight to a page
+        if (e.Control && e.KeyCode is >= Keys.D1 and <= Keys.D9)
+        {
+            int idx = e.KeyCode - Keys.D1;
+            if (idx < _tabs.TabPages.Count) _tabs.SelectedIndex = idx;
+            e.Handled = e.SuppressKeyPress = true;
+        }
     }
 
     private void PopulateFormCore()
@@ -1973,13 +2618,16 @@ internal sealed class SettingsForm : Form
             {
                 Text = label,
                 AutoSize = true,
-                Anchor = AnchorStyles.Left | AnchorStyles.Top,
-                Padding = new Padding(0, 5, 0, 0),
+                // Anchored left only → centred vertically against the input in the same row.
+                Anchor = AnchorStyles.Left,
+                ForeColor = UITheme.Text,
             };
             tbl.Controls.Add(lbl, 0, row);
         }
 
-        ctrl.Anchor = AnchorStyles.Left | AnchorStyles.Top;
+        ctrl.Anchor = AnchorStyles.Left;
+        // Room for the rounded frame the theme paints around inputs.
+        ctrl.Margin = new Padding(6, 6, 3, 6);
         tbl.Controls.Add(ctrl, 1, row);
         return lbl;
     }

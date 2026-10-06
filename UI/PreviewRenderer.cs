@@ -34,6 +34,12 @@ internal static class PreviewRenderer
             // Bitmap copy so the backing stream can be safely disposed (otherwise
             // GDI+ throws when the image is later drawn).
             byte[] bytes = await File.ReadAllBytesAsync(outPath);
+
+            // Animated ticker: keep every frame. GDI+ reads GIF frames lazily from the
+            // stream, so it must stay open for the image's lifetime (it is in-memory).
+            if (outPath.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+                return (Image.FromStream(new MemoryStream(bytes)), null);
+
             using var ms = new MemoryStream(bytes);
             using var loaded = Image.FromStream(ms);
             return (new Bitmap(loaded), null);

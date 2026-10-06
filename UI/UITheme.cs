@@ -41,13 +41,17 @@ internal static class UITheme
             switch (c)
             {
                 case TextBox tb:
-                    tb.BackColor = Input; tb.ForeColor = Text; tb.BorderStyle = BorderStyle.FixedSingle;
+                    tb.BackColor = Input; tb.ForeColor = Text; tb.BorderStyle = BorderStyle.None;
+                    SetTextMargins(tb, 6, 6);
+                    RegisterInput(tb);
                     break;
                 case ListBox lb:
-                    lb.BackColor = Input; lb.ForeColor = Text; lb.BorderStyle = BorderStyle.FixedSingle;
+                    lb.BackColor = Input; lb.ForeColor = Text; lb.BorderStyle = BorderStyle.None;
+                    RegisterInput(lb);
                     break;
                 case ComboBox cb:
-                    cb.BackColor = Input; cb.ForeColor = Text; cb.FlatStyle = FlatStyle.Flat;
+                    StyleCombo(cb);
+                    RegisterInput(cb);
                     break;
                 case NumericUpDown nud:
                     nud.BackColor = Input; nud.ForeColor = Text; nud.BorderStyle = BorderStyle.FixedSingle;
@@ -56,12 +60,10 @@ internal static class UITheme
                     { child.BackColor = Input; child.ForeColor = Text; }
                     break;
                 case CheckBox chk:
-                    chk.ForeColor = Text; chk.BackColor = Color.Transparent;
-                    chk.FlatStyle = FlatStyle.Flat;
-                    chk.FlatAppearance.BorderColor = Border;
+                    StyleToggle(chk, round: false);
                     break;
                 case RadioButton rb:
-                    rb.ForeColor = Text; rb.BackColor = Color.Transparent;
+                    StyleToggle(rb, round: true);
                     break;
                 case GroupBox gb:
                     gb.ForeColor = Accent; gb.BackColor = Color.Transparent;
@@ -88,6 +90,225 @@ internal static class UITheme
             if (c.HasChildren) Apply(c);
         }
     }
+
+    // ─── Inputs: borderless, with a rounded frame painted by the parent ──────
+
+    // Inputs whose rounded frame is painted by their parent.
+    private static readonly HashSet<Control> Inputs = [];
+    // Parents that already carry the frame-painting handler.
+    private static readonly HashSet<Control> FramedParents = [];
+
+    private const int EM_SETMARGINS = 0x00D3;
+    private const int EC_LEFTMARGIN = 0x0001;
+    private const int EC_RIGHTMARGIN = 0x0002;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>Inner horizontal padding of a borderless text box, so text doesn't touch the frame.</summary>
+    private static void SetTextMargins(TextBox tb, int left, int right)
+    {
+        void ApplyMargins()
+        {
+            if (!tb.IsHandleCreated) return;
+            try { SendMessage(tb.Handle, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, (right << 16) | left); }
+            catch { /* cosmetic only */ }
+        }
+        if (tb.IsHandleCreated) ApplyMargins(); else tb.HandleCreated += (_, _) => ApplyMargins();
+    }
+
+    /// <summary>
+    /// Marks a control as an input: its parent paints a rounded frame around it, tinted
+    /// with the accent while the input has focus — so it is obvious where typing goes.
+    /// </summary>
+    private static void RegisterInput(Control input)
+    {
+        if (!Inputs.Add(input)) return;
+
+        void Refresh() => input.Parent?.Invalidate(Rectangle.Inflate(input.Bounds, 6, 6), false);
+
+        input.GotFocus += (_, _) => Refresh();
+        input.LostFocus += (_, _) => Refresh();
+        input.Enter += (_, _) => Refresh();
+        input.Leave += (_, _) => Refresh();
+        input.EnabledChanged += (_, _) => Refresh();
+        input.VisibleChanged += (_, _) => input.Parent?.Invalidate();
+        input.LocationChanged += (_, _) => input.Parent?.Invalidate();
+        input.SizeChanged += (_, _) => input.Parent?.Invalidate();
+        input.Disposed += (_, _) => Inputs.Remove(input);
+
+        AttachFramePainter(input.Parent);
+        input.ParentChanged += (_, _) => AttachFramePainter(input.Parent);
+    }
+
+    private static void AttachFramePainter(Control? parent)
+    {
+        if (parent is null || !FramedParents.Add(parent)) return;
+        EnableDoubleBuffering(parent);
+
+        parent.Paint += (s, e) =>
+        {
+            var host = (Control)s!;
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            foreach (Control child in host.Controls)
+            {
+                if (!Inputs.Contains(child) || !child.Visible) continue;
+
+                bool focused = child.Focused || child.ContainsFocus;
+                var r = Rectangle.Inflate(child.Bounds, 4, 4);
+                r.Width -= 1; r.Height -= 1;
+                if (r.Width <= 0 || r.Height <= 0) continue;
+
+                using var path = RoundedButton.RoundedRect(r, 7);
+                using (var fill = new SolidBrush(child.Enabled ? Input : InputDisabled))
+                    g.FillPath(fill, path);
+                using (var pen = new Pen(focused ? Accent : Border, focused ? 1.6f : 1f))
+                    g.DrawPath(pen, path);
+
+                if (!focused) continue;
+
+                // Soft outer glow — the WinForms stand-in for a CSS focus box-shadow.
+                using var gp = RoundedButton.RoundedRect(Rectangle.Inflate(r, 2, 2), 9);
+                using var gpen = new Pen(Color.FromArgb(70, Accent), 2f);
+                g.DrawPath(gpen, gp);
+            }
+        };
+
+        parent.Disposed += (_, _) => FramedParents.Remove(parent);
+    }
+
+    /// <summary>
+    /// Dark drop-down: owner-drawn items (the closed box and the list) so it no longer shows
+    /// the light system face, with an accent-highlighted selection.
+    /// </summary>
+    public static void StyleCombo(ComboBox cb)
+    {
+        cb.BackColor = Input;
+        cb.ForeColor = Text;
+        cb.FlatStyle = FlatStyle.Flat;
+        cb.Cursor = Cursors.Hand;
+        if (cb.DrawMode == DrawMode.OwnerDrawFixed) return;   // already styled
+
+        cb.DrawMode = DrawMode.OwnerDrawFixed;
+        cb.ItemHeight = Math.Max(cb.ItemHeight, cb.Font.Height + 6);
+        cb.DrawItem += (s, e) =>
+        {
+            var box = (ComboBox)s!;
+            bool edit = (e.State & DrawItemState.ComboBoxEdit) != 0;
+            bool selected = !edit && (e.State & DrawItemState.Selected) != 0;
+
+            using (var bg = new SolidBrush(selected ? Accent2 : box.Enabled ? Input : InputDisabled))
+                e.Graphics.FillRectangle(bg, e.Bounds);
+
+            if (e.Index < 0) return;
+            var text = box.GetItemText(box.Items[e.Index]);
+            var fore = !box.Enabled ? TextDim : selected ? Color.White : Text;
+            var r = new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 8, e.Bounds.Height);
+            TextRenderer.DrawText(e.Graphics, text, box.Font, r, fore,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        };
+    }
+
+    // ─── Check boxes / radio buttons ─────────────────────────────────────────
+
+    // Controls already carrying the toggle painter, so a second Apply() pass is a no-op.
+    private static readonly HashSet<Control> Toggles = [];
+
+    /// <summary>Box painted over the native glyph; the flat glyph is 13px wide.</summary>
+    private const int GlyphBox = 15;
+
+    /// <summary>
+    /// Repaints the glyph of a CheckBox/RadioButton so its state reads at a glance on the
+    /// dark theme: unchecked is an empty outlined box, checked is a filled accent box with a
+    /// dark tick (or dot). The flat WinForms glyph only shifts a nearly-black tick on a
+    /// nearly-black square, which is what made the state invisible.
+    ///
+    /// ButtonBase paints itself before raising Paint, so drawing here simply layers on top.
+    /// </summary>
+    public static void StyleToggle(ButtonBase btn, bool round)
+    {
+        btn.ForeColor = Text;
+        btn.BackColor = Color.Transparent;
+        btn.FlatStyle = FlatStyle.Flat;
+        btn.FlatAppearance.BorderColor = Border;
+        btn.FlatAppearance.CheckedBackColor = Color.Transparent;
+        btn.Cursor = Cursors.Hand;
+
+        if (!Toggles.Add(btn)) return;
+        btn.Disposed += (_, _) => Toggles.Remove(btn);
+        EnableDoubleBuffering(btn);
+
+        bool hover = false;
+        btn.MouseEnter += (_, _) => { hover = true; btn.Invalidate(); };
+        btn.MouseLeave += (_, _) => { hover = false; btn.Invalidate(); };
+        // CheckedChanged fires before the repaint in some layouts — force one.
+        if (btn is CheckBox c) c.CheckedChanged += (_, _) => btn.Invalidate();
+        if (btn is RadioButton r) r.CheckedChanged += (_, _) => btn.Invalidate();
+
+        btn.Paint += (s, e) =>
+        {
+            var ctl = (ButtonBase)s!;
+            bool on = ctl is CheckBox cb ? cb.Checked : ((RadioButton)ctl).Checked;
+
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            // Our box is drawn opaque over the 13px native glyph, so it hides it entirely —
+            // no need to know the (possibly transparent) parent background colour.
+            var box = new Rectangle(0, (ctl.Height - GlyphBox) / 2, GlyphBox - 1, GlyphBox - 1);
+            Color line = !ctl.Enabled ? Border : on ? Accent : hover ? Mix(Border, Accent, 0.5) : Border;
+
+            using var path = round ? EllipsePath(box) : RoundedButton.RoundedRect(box, 4);
+
+            using (var fill = new SolidBrush(on && ctl.Enabled ? Accent : Input))
+                g.FillPath(fill, path);
+            using (var pen = new Pen(line, on ? 1.6f : 1.2f))
+                g.DrawPath(pen, path);
+
+            if (!on) return;
+
+            if (round)
+            {
+                var dot = Rectangle.Inflate(box, -4, -4);
+                using var inner = new SolidBrush(Bg);
+                g.FillEllipse(inner, dot);
+                return;
+            }
+
+            // Tick drawn dark on the accent fill for maximum contrast
+            using var tick = new Pen(ctl.Enabled ? Bg : TextDim, 2f)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round,
+            };
+            float x = box.X, y = box.Y, w = box.Width, h = box.Height;
+            g.DrawLines(tick,
+            [
+                new PointF(x + w * 0.24f, y + h * 0.52f),
+                new PointF(x + w * 0.44f, y + h * 0.72f),
+                new PointF(x + w * 0.78f, y + h * 0.28f),
+            ]);
+        };
+    }
+
+    private static GraphicsPath EllipsePath(Rectangle r)
+    {
+        var p = new GraphicsPath();
+        p.AddEllipse(r);
+        return p;
+    }
+
+    private static Color Mix(Color a, Color b, double t) => Color.FromArgb(
+        (int)(a.R + (b.R - a.R) * t),
+        (int)(a.G + (b.G - a.G) * t),
+        (int)(a.B + (b.B - a.B) * t));
+
+    private static void EnableDoubleBuffering(Control c) =>
+        typeof(Control)
+            .GetProperty("DoubleBuffered", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.SetValue(c, true);
 
     /// <summary>Owner-draws the tab strip as modern segmented pills.</summary>
     public static void StyleTabs(TabControl tabs)

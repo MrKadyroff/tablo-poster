@@ -332,6 +332,16 @@ public sealed class OnbonLedController : IDisposable, ILedController
         if (sizeValidation is not null)
             return sizeValidation;
 
+        // Animated board (ticker): try the GIF as-is first — converting it would keep only
+        // the first frame. If the card rejects it, fall through to the BMP path below so
+        // the board still shows a still picture instead of nothing.
+        if (imagePath.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+        {
+            var gifStatus = await TrySendGifAsync(imagePath, bypassDuplicateCheck, ct);
+            if (gifStatus is not null)
+                return gifStatus;
+        }
+
         // SDK works best with BMP — convert other formats before sending.
         string bmpPath = imagePath;
         string? jpgPath = null;
@@ -431,6 +441,60 @@ public sealed class OnbonLedController : IDisposable, ILedController
             if (isJpgTemp && jpgPath is not null && File.Exists(jpgPath))
                 try { File.Delete(jpgPath); } catch { /* ignore temp cleanup error */ }
         }
+    }
+
+    /// <summary>
+    /// Sends an animated GIF unchanged. Returns the final status on success (or on a
+    /// duplicate skip / cancellation), and null when the card refused it — the caller then
+    /// sends the first frame as a BMP. In the isolated helper the failure is returned
+    /// as-is: the parent process owns the fallback, so it must not run twice.
+    /// </summary>
+    private async Task<LedSendStatus?> TrySendGifAsync(
+        string gifPath, bool bypassDuplicateCheck, CancellationToken ct)
+    {
+        string? hash = null;
+        if (_options.SkipDuplicateUploads)
+        {
+            hash = await ComputeSha256Async(gifPath, ct);
+            if (!bypassDuplicateCheck)
+            {
+                lock (_hashLock)
+                {
+                    if (_lastSentImageHash is not null && _lastSentImageHash == hash)
+                    {
+                        Log(LogLevel.Information,
+                            "[SendImage] Skipped duplicate GIF (same hash as previous send).");
+                        return LedSendStatus.Ok("Skipped duplicate image (already sent).", duplicateSkipped: true);
+                    }
+                }
+            }
+        }
+
+        LedSendStatus status;
+        try
+        {
+            status = _options.UseIsolatedSender && !_isHelperProcess
+                ? await SendImageViaIsolatedProcessAsync(gifPath, ct)
+                : await SendImageInProcessAsync(gifPath, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return LedSendStatus.Fail(LedSendErrorType.Cancelled, "Image send cancelled.");
+        }
+
+        if (status.Success)
+        {
+            if (hash is not null)
+                lock (_hashLock) _lastSentImageHash = hash;
+            return LedSendStatus.Ok("Image sent successfully (format=gif).");
+        }
+
+        if (_isHelperProcess || status.ErrorType == LedSendErrorType.Cancelled)
+            return status;
+
+        Log(LogLevel.Warning,
+            $"[SendImage] GIF attempt failed: {status.Message}. Falling back to a still BMP (first frame, no ticker animation).");
+        return null;
     }
 
     private async Task<LedSendStatus?> ValidateImageSizeBeforePublishAsync(string imagePath, CancellationToken ct)

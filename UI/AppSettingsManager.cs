@@ -126,6 +126,28 @@ internal sealed class AppConfig
     public int ColFlagX { get; set; } = 2;
     public int ColFlagW { get; set; } = 23;
     public int ColFlagH { get; set; } = 24;
+    /// <summary>Scrolling band at the top of the board (renders final.gif instead of final.jpg).</summary>
+    public bool TickerEnabled { get; set; }
+    /// <summary>Ticker scroll speed in board pixels per frame.</summary>
+    public double TickerSpeed { get; set; } = 3;
+    /// <summary>Ticker band colour, "#RRGGBB" (default: eCash orange).</summary>
+    public string TickerBgColor { get; set; } = "#F58220";
+    /// <summary>Ticker text colour, "#RRGGBB".</summary>
+    public string TickerTextColor { get; set; } = "#FFFFFF";
+    /// <summary>Glint sweeping over random flags (renders final.gif instead of final.jpg).</summary>
+    public bool ShineEnabled { get; set; }
+    /// <summary>How many flags glint per render.</summary>
+    public int ShineCount { get; set; } = 3;
+    /// <summary>Glint brightness, 0.05..1.</summary>
+    public double ShineStrength { get; set; } = 0.75;
+    /// <summary>Glint width as a fraction of the flag width, 0.05..1.</summary>
+    public double ShineWidth { get; set; } = 0.35;
+    /// <summary>Ticker band height in board pixels. 0 = automatic (~14 % of the board).</summary>
+    public int TickerH { get; set; }
+    /// <summary>Ticker text size in board pixels. 0 = automatic (72 % of the band).</summary>
+    public int TickerFontSize { get; set; }
+    /// <summary>Custom ticker text, one message per line. Empty = "Обмен валют" in several languages.</summary>
+    public string TickerText { get; set; } = "";
     public int ColCodeX { get; set; } = 27;
     public int ColBuyX { get; set; } = 57;
     public int ColBuyW { get; set; } = 38;
@@ -365,6 +387,17 @@ internal static class AppSettingsManager
                 cfg.ColFlagX = GetI("colFlagX", cfg.ColFlagX);
                 cfg.ColFlagW = GetI("colFlagW", cfg.ColFlagW);
                 cfg.ColFlagH = GetI("colFlagH", cfg.ColFlagH);
+                cfg.TickerEnabled = gl["ticker"]?["enabled"]?.GetValue<bool>() ?? cfg.TickerEnabled;
+                cfg.TickerSpeed = gl["ticker"]?["speed"]?.GetValue<double>() ?? cfg.TickerSpeed;
+                cfg.TickerBgColor = gl["ticker"]?["bgColor"]?.GetValue<string>() ?? cfg.TickerBgColor;
+                cfg.TickerTextColor = gl["ticker"]?["textColor"]?.GetValue<string>() ?? cfg.TickerTextColor;
+                cfg.ShineEnabled = gl["shine"]?["enabled"]?.GetValue<bool>() ?? cfg.ShineEnabled;
+                cfg.ShineCount = gl["shine"]?["count"]?.GetValue<int>() ?? cfg.ShineCount;
+                cfg.ShineStrength = gl["shine"]?["strength"]?.GetValue<double>() ?? cfg.ShineStrength;
+                cfg.ShineWidth = gl["shine"]?["width"]?.GetValue<double>() ?? cfg.ShineWidth;
+                cfg.TickerText = gl["ticker"]?["text"]?.GetValue<string>() ?? cfg.TickerText;
+                cfg.TickerH = gl["ticker"]?["h"]?.GetValue<int>() ?? cfg.TickerH;
+                cfg.TickerFontSize = gl["ticker"]?["fontSize"]?.GetValue<int>() ?? cfg.TickerFontSize;
                 cfg.ColCodeX = GetI("colCodeX", cfg.ColCodeX);
                 cfg.ColBuyX = GetI("colBuyX", cfg.ColBuyX);
                 cfg.ColBuyW = GetI("colBuyW", cfg.ColBuyW);
@@ -679,6 +712,28 @@ internal static class AppSettingsManager
         gl["colFlagX"] = cfg.ColFlagX;
         gl["colFlagW"] = cfg.ColFlagW;
         gl["colFlagH"] = cfg.ColFlagH;
+
+        // Keep whatever else the point tuned in the ticker (colors, langs, height …) —
+        // the UI only drives the switch, the speed and the text.
+        var ticker = gl["ticker"]?.AsObject() ?? new JsonObject();
+        ticker["enabled"] = cfg.TickerEnabled;
+        ticker["speed"] = Math.Round(cfg.TickerSpeed, 1);
+        ticker["bgColor"] = cfg.TickerBgColor;
+        ticker["textColor"] = cfg.TickerTextColor;
+        // 0 = automatic → drop the key so the composer picks its defaults
+        if (cfg.TickerH > 0) ticker["h"] = cfg.TickerH; else ticker.Remove("h");
+        if (cfg.TickerFontSize > 0) ticker["fontSize"] = cfg.TickerFontSize; else ticker.Remove("fontSize");
+        if (string.IsNullOrWhiteSpace(cfg.TickerText)) ticker.Remove("text");
+        else ticker["text"] = cfg.TickerText.Trim();
+        gl["ticker"] = ticker;
+
+        // Keep the point's own tuning (count, strength, width) - the UI drives the switch.
+        var shine = gl["shine"]?.AsObject() ?? new JsonObject();
+        shine["enabled"] = cfg.ShineEnabled;
+        shine["count"] = cfg.ShineCount;
+        shine["strength"] = Math.Round(cfg.ShineStrength, 2);
+        shine["width"] = Math.Round(cfg.ShineWidth, 2);
+        gl["shine"] = shine;
         gl["colCodeX"] = cfg.ColCodeX;
         gl["colBuyX"] = cfg.ColBuyX;
         gl["colBuyW"] = cfg.ColBuyW;
