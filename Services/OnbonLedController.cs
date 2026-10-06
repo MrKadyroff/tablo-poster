@@ -47,7 +47,12 @@ public sealed class OnbonLedController : IDisposable, ILedController
     private string ControllerIp => _boardLink.OverrideControllerIp ?? _options.ControllerIp;
 
     // Ensures only one SDK operation runs at a time (YQNetCom.dll is not thread-safe).
-    private readonly SemaphoreSlim _sdkLock = new(1, 1);
+    // Static: with two boards in one process the native SDK still sees one caller at a time.
+    private static readonly SemaphoreSlim _sdkLock = new(1, 1);
+
+    // Which point this controller serves. Keeps each board's SDK staging folder separate so
+    // two boards never overwrite each other's sdk_input.* while sending.
+    private readonly string? _pointKey;
     private readonly object _hashLock = new();
 
     private bool _sdkInitialized;
@@ -237,8 +242,10 @@ public sealed class OnbonLedController : IDisposable, ILedController
         ILogger<OnbonLedController> logger,
         IOptions<OnbonOptions> options,
         InMemoryLogStore logStore,
-        BoardLinkState boardLink)
+        BoardLinkState boardLink,
+        IConfiguration? configuration = null)
     {
+        _pointKey = configuration?["ActivePointId"];
         _logger = logger;
         _options = options.Value;
         _logStore = logStore;
@@ -677,6 +684,12 @@ public sealed class OnbonLedController : IDisposable, ILedController
         psi.ArgumentList.Add(OnbonSendIsolationHelper.HelperFlag);
         psi.ArgumentList.Add("--image");
         psi.ArgumentList.Add(bmpPath);
+        // The helper builds its own config; without this it would always pick the first board's point.
+        if (!string.IsNullOrWhiteSpace(_pointKey))
+        {
+            psi.ArgumentList.Add("--point");
+            psi.ArgumentList.Add(_pointKey);
+        }
         psi.Environment["ONBON_HELPER_MODE"] = "1";
 
         using var proc = Process.Start(psi);
@@ -977,6 +990,7 @@ public sealed class OnbonLedController : IDisposable, ILedController
             $"[SendImage] [SDK] create_playlist(w={_options.ScreenWidth}, h={_options.ScreenHeight}, type={_options.DeviceType})");
 
         var tempPath = Path.GetFullPath(_options.TempPath);
+        if (!string.IsNullOrWhiteSpace(_pointKey)) tempPath = Path.Combine(tempPath, _pointKey);
         Directory.CreateDirectory(tempPath);
 
         // Keep SDK image path very short and stable (some firmware builds are
@@ -1643,7 +1657,6 @@ public sealed class OnbonLedController : IDisposable, ILedController
         if (_disposed) return;
         _disposed = true;
 
-        _sdkLock.Dispose();
 
         // Do NOT call release_sdk() here. The native SDK is process-global and is
         // reused across host restarts (the tray app rebuilds this singleton on

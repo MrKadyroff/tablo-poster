@@ -12,7 +12,8 @@ public sealed class InMemoryLogStore
     private const string LogFilePath = "logs/led-all.log";
 
     private readonly ConcurrentQueue<LogEntry> _entries = new();
-    private readonly object _fileLock = new();
+    // Static: with two boards in one process every log store appends to the same file.
+    private static readonly object _fileLock = new();
 
     public InMemoryLogStore()
     {

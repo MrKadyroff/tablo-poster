@@ -42,7 +42,7 @@ internal static class OnbonSendIsolationHelper
                 .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
                 .Build();
 
-            var activePointId = baseConfig["ActivePointId"];
+            var activePointId = GetArgValue(args, "--point") ?? baseConfig["ActivePointId"];
 
             var configBuilder = new ConfigurationBuilder()
                 .SetBasePath(baseDir)
@@ -55,6 +55,10 @@ internal static class OnbonSendIsolationHelper
                 if (File.Exists(pointConfigFull))
                     configBuilder.AddJsonFile(pointConfigRelative, optional: false, reloadOnChange: false);
             }
+
+            // Tell the controller which point it is serving (separate SDK staging folder per board).
+            if (!string.IsNullOrWhiteSpace(activePointId))
+                configBuilder.AddInMemoryCollection(new Dictionary<string, string?> { ["ActivePointId"] = activePointId });
 
             var config = configBuilder.Build();
 
@@ -79,7 +83,8 @@ internal static class OnbonSendIsolationHelper
                 loggerFactory.CreateLogger<OnbonLedController>(),
                 Options.Create(options),
                 logStore,
-                new BoardLinkState());
+                new BoardLinkState(),
+                config);
 
             // The parent process already made the duplicate-skip decision before spawning
             // this helper; here we always send what we were handed.
