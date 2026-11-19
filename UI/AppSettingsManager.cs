@@ -1,3 +1,4 @@
+using LedImageUpdaterService.Services.DoubleSided;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
@@ -98,6 +99,22 @@ internal sealed class AppConfig
     public List<int?> ColumnX { get; set; } = [];
     public int CanvasWidth { get; set; } = 128;
     public int CanvasHeight { get; set; } = 256;
+    // Clockwise rotation of the final picture (0/90/180/270) for boards mounted rotated.
+    public int Rotate { get; set; }
+
+    // ── Режим «Аэропорт» (двустороннее табло), секция doubleSided в compose.json ──
+    public bool DoubleSidedEnabled { get; set; }
+    public string DoubleSidedJoinLayout { get; set; } = "horizontal";
+    public int DoubleSidedSideRotation { get; set; } = 270;
+    public string DoubleSidedSecondSide { get; set; } = "mirror";
+
+    public DoubleSidedOptions DoubleSidedOptions => new DoubleSidedOptions()
+    {
+        Enabled = DoubleSidedEnabled,
+        JoinLayout = DoubleSidedJoinLayout,
+        SideRotation = DoubleSidedSideRotation,
+        SecondSide = DoubleSidedSecondSide,
+    }.Normalized();
 
     public static List<string> DefaultBuyLabels => ["Сатып аламыз", "Покупаем", "We buy"];
     public static List<string> DefaultSellLabels => ["Сатамыз", "Продаем", "We sell"];
@@ -141,6 +158,33 @@ internal sealed class AppConfig
     public int ColFlagX { get; set; } = 2;
     public int ColFlagW { get; set; } = 23;
     public int ColFlagH { get; set; } = 24;
+    /// <summary>Corner radius of the flag in board pixels. 0 = square corners.</summary>
+    public int FlagRadius { get; set; } = 2;
+    /// <summary>Draw flags above everything else so nothing can overlap them.</summary>
+    public bool FlagOnTop { get; set; }
+    /// <summary>Draw the logo above rows, stripes and flags.</summary>
+    public bool LogoOnTop { get; set; }
+    /// <summary>Zebra row stripes + grid lines, the airport-timetable look.</summary>
+    public bool RowStripes { get; set; }
+    // Free-placed picture (QR code, second logo …) — gridLayout.overlays[0]
+    public bool ImageEnabled { get; set; }
+    /// <summary>Path relative to the app folder, e.g. content/points/aport2/images/overlay.png.</summary>
+    public string ImageFile { get; set; } = "";
+    public int ImageX { get; set; } = 2;
+    public int ImageY { get; set; } = 2;
+    public int ImageW { get; set; } = 40;
+    public int ImageH { get; set; } = 40;
+    public bool ImageOnTop { get; set; } = true;
+    /// <summary>Crisp pixels (for QR codes) instead of smooth scaling.</summary>
+    public bool ImageSharp { get; set; }
+    /// <summary>Заставка с логотипом каждые N секунд (секция splash).</summary>
+    public bool SplashEnabled { get; set; }
+    public int SplashPeriodSec { get; set; } = 10;
+    public double SplashDurationSec { get; set; } = 2.6;
+    /// <summary>Прокрутка остальных валют (gridLayout.scroll): закреплённые строки стоят, остальные листаются.</summary>
+    public bool ScrollEnabled { get; set; }
+    public string ScrollPinned { get; set; } = "USD, EUR, RUB";
+    public double ScrollSpeed { get; set; } = 3.0;
     /// <summary>Scrolling band at the top of the board (renders final.gif instead of final.jpg).</summary>
     public bool TickerEnabled { get; set; }
     /// <summary>Ticker scroll speed in board pixels per frame.</summary>
@@ -357,6 +401,28 @@ internal static class AppSettingsManager
                 cfg.CanvasHeight = canvas["height"]?.GetValue<int>() ?? cfg.CanvasHeight;
             }
 
+            cfg.Rotate = root["rotate"]?.GetValue<int>() ?? 0;
+
+            cfg.SplashEnabled = root["splash"]?["enabled"]?.GetValue<bool>() ?? false;
+            cfg.SplashPeriodSec = root["splash"]?["periodSec"]?.GetValue<int>() ?? 10;
+            cfg.SplashDurationSec = (root["splash"]?["durationMs"]?.GetValue<int>() ?? 2600) / 1000.0;
+
+            var dsNode = root["doubleSided"]?.AsObject();
+            if (dsNode != null)
+            {
+                var d = new DoubleSidedOptions
+                {
+                    Enabled = dsNode["enabled"]?.GetValue<bool>() ?? false,
+                    JoinLayout = dsNode["joinLayout"]?.GetValue<string>() ?? "horizontal",
+                    SideRotation = dsNode["sideRotation"]?.GetValue<int>() ?? 270,
+                    SecondSide = dsNode["secondSide"]?.GetValue<string>() ?? "mirror",
+                }.Normalized();
+                cfg.DoubleSidedEnabled = d.Enabled;
+                cfg.DoubleSidedJoinLayout = d.JoinLayout;
+                cfg.DoubleSidedSideRotation = d.SideRotation;
+                cfg.DoubleSidedSecondSide = d.SecondSide;
+            }
+
             var gl = root["gridLayout"]?.AsObject();
             if (gl != null)
             {
@@ -401,6 +467,7 @@ internal static class AppSettingsManager
 
                 int GetI(string key, int def) => gl[key]?.GetValue<int>() ?? def;
                 double GetD(string key, double def) => gl[key]?.GetValue<double>() ?? def;
+                bool GetB(string key, bool def) => gl[key]?.GetValue<bool>() ?? def;
 
                 cfg.LogoX = GetI("logoX", cfg.LogoX);
                 cfg.LogoY = GetI("logoY", cfg.LogoY);
@@ -416,6 +483,30 @@ internal static class AppSettingsManager
                 cfg.ColFlagX = GetI("colFlagX", cfg.ColFlagX);
                 cfg.ColFlagW = GetI("colFlagW", cfg.ColFlagW);
                 cfg.ColFlagH = GetI("colFlagH", cfg.ColFlagH);
+                cfg.FlagRadius = (int)Math.Round(gl["flagRadius"]?.GetValue<double>() ?? cfg.FlagRadius);
+                cfg.FlagOnTop = GetB("flagOnTop", cfg.FlagOnTop);
+                cfg.LogoOnTop = GetB("logoOnTop", cfg.LogoOnTop);
+                cfg.RowStripes = !string.IsNullOrWhiteSpace(gl["rowBgOdd"]?.GetValue<string>());
+                var ovNode = gl["overlays"]?.AsArray().FirstOrDefault()?.AsObject();
+                if (ovNode != null)
+                {
+                    cfg.ImageEnabled = ovNode["enabled"]?.GetValue<bool>() ?? true;
+                    cfg.ImageFile = ovNode["file"]?.GetValue<string>() ?? "";
+                    cfg.ImageX = ovNode["x"]?.GetValue<int>() ?? cfg.ImageX;
+                    cfg.ImageY = ovNode["y"]?.GetValue<int>() ?? cfg.ImageY;
+                    cfg.ImageW = ovNode["w"]?.GetValue<int>() ?? cfg.ImageW;
+                    cfg.ImageH = ovNode["h"]?.GetValue<int>() ?? cfg.ImageH;
+                    cfg.ImageOnTop = ovNode["onTop"]?.GetValue<bool>() ?? false;
+                    cfg.ImageSharp = ovNode["sharp"]?.GetValue<bool>() ?? false;
+                }
+                var scNode = gl["scroll"]?.AsObject();
+                if (scNode != null)
+                {
+                    cfg.ScrollEnabled = scNode["enabled"]?.GetValue<bool>() ?? false;
+                    var pin = ReadStringArray(scNode["pinned"]);
+                    if (pin.Count > 0) cfg.ScrollPinned = string.Join(", ", pin);
+                    cfg.ScrollSpeed = scNode["speed"]?.GetValue<double>() ?? 3.0;
+                }
                 cfg.TickerEnabled = gl["ticker"]?["enabled"]?.GetValue<bool>() ?? cfg.TickerEnabled;
                 cfg.TickerSpeed = gl["ticker"]?["speed"]?.GetValue<double>() ?? cfg.TickerSpeed;
                 cfg.TickerBgColor = gl["ticker"]?["bgColor"]?.GetValue<string>() ?? cfg.TickerBgColor;
@@ -647,13 +738,17 @@ internal static class AppSettingsManager
     /// production compose.json or the watched output image the board service sends.
     /// Returns (composePath, expectedOutputPath).
     /// </summary>
-    public static (string composePath, string outputPath) WriteTempCompose(AppConfig cfg)
+    public static (string composePath, string outputPath) WriteTempCompose(AppConfig cfg, bool keepRotation = false)
     {
         var basePath = Path.Combine(AppDir, "layout", "points", $"{cfg.ActivePointId}.compose.json");
         var root = BuildComposeObject(cfg, File.Exists(basePath) ? basePath : null);
 
         var outputPath = Path.Combine(Path.GetTempPath(), $"ecash_preview_{cfg.ActivePointId}.jpg");
         root["outputFile"] = outputPath;
+        if (!keepRotation) root.Remove("rotate");   // the editor preview shows the design as drawn, unrotated
+        // Превью дизайна показывает макет одной стороны — без склейки и заставки.
+        root.Remove("doubleSided");
+        root.Remove("splash");
 
         var composePath = Path.Combine(Path.GetTempPath(), $"ecash_preview_{cfg.ActivePointId}.compose.json");
         File.WriteAllText(composePath, root.ToJsonString(_writeOpts));
@@ -678,6 +773,33 @@ internal static class AppSettingsManager
         canvas["width"] = cfg.CanvasWidth;
         canvas["height"] = cfg.CanvasHeight;
         root["canvas"] = canvas;
+        root["rotate"] = cfg.Rotate;
+
+        // Заставка: сохраняем period/duration, если уже заданы.
+        if (cfg.SplashEnabled || root["splash"] != null)
+        {
+            var sp = root["splash"]?.AsObject() ?? new JsonObject();
+            sp["enabled"] = cfg.SplashEnabled;
+            int period = Math.Clamp(cfg.SplashPeriodSec, 3, 120);
+            // Заставка должна быть короче периода, иначе курсам не остаётся времени.
+            int dur = (int)Math.Round(Math.Clamp(cfg.SplashDurationSec, 0.8, period - 0.5) * 1000);
+            sp["periodSec"] = period;
+            sp["durationMs"] = dur;
+            root["splash"] = sp;
+        }
+
+        // Режим «Аэропорт». Для обычных точек секция не создаётся.
+        if (cfg.DoubleSidedEnabled || root["doubleSided"] != null)
+        {
+            var d = cfg.DoubleSidedOptions;
+            root["doubleSided"] = new JsonObject
+            {
+                ["enabled"] = d.Enabled,
+                ["joinLayout"] = d.JoinLayout,
+                ["sideRotation"] = d.SideRotation,
+                ["secondSide"] = d.SecondSide,
+            };
+        }
 
         // sourceDir/outputFile are required by DotnetComposer.ComposeConfig. Preserve
         // the template's values, but always guarantee they are present so a regenerated
@@ -747,6 +869,41 @@ internal static class AppSettingsManager
         gl["colFlagX"] = cfg.ColFlagX;
         gl["colFlagW"] = cfg.ColFlagW;
         gl["colFlagH"] = cfg.ColFlagH;
+        gl["flagRadius"] = cfg.FlagRadius;
+        gl["flagOnTop"] = cfg.FlagOnTop;
+        // Written only when on (or already present) so other points' files stay untouched.
+        if (cfg.LogoOnTop || gl["logoOnTop"] != null) gl["logoOnTop"] = cfg.LogoOnTop;
+
+        // Free-placed picture = overlays[0]; any further overlays edited by hand stay untouched.
+        if (!string.IsNullOrWhiteSpace(cfg.ImageFile) || gl["overlays"] != null)
+        {
+            var arr = gl["overlays"]?.AsArray() ?? new JsonArray();
+            var first = arr.Count > 0 ? arr[0]?.AsObject() : null;
+            if (first is null) { first = new JsonObject(); arr.Insert(0, first); }
+            first["enabled"] = cfg.ImageEnabled;
+            first["file"] = cfg.ImageFile.Replace('\\', '/');
+            first["x"] = cfg.ImageX;
+            first["y"] = cfg.ImageY;
+            first["w"] = cfg.ImageW;
+            first["h"] = cfg.ImageH;
+            first["onTop"] = cfg.ImageOnTop;
+            first["sharp"] = cfg.ImageSharp;
+            gl["overlays"] = arr;
+        }
+
+        if (cfg.ScrollEnabled || gl["scroll"] != null)
+        {
+            var sc = gl["scroll"]?.AsObject() ?? new JsonObject();
+            sc["enabled"] = cfg.ScrollEnabled;
+            var pinned = cfg.ScrollPinned.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(x => x.ToUpperInvariant()).Distinct().ToList();
+            var parr = new JsonArray();
+            foreach (var c in pinned) parr.Add(c);
+            sc["pinned"] = parr;
+            sc["speed"] = Math.Round(Math.Clamp(cfg.ScrollSpeed, 0.5, 8), 1);
+            gl["scroll"] = sc;
+        }
+        ApplyRowStripes(gl, cfg.RowStripes);
 
         // Keep whatever else the point tuned in the ticker (colors, langs, height …) —
         // the UI only drives the switch, the speed and the text.
@@ -785,6 +942,32 @@ internal static class AppSettingsManager
 
         root["gridLayout"] = gl;
         return root;
+    }
+
+    // Airport-timetable look: alternating row stripes with thin separators.
+    // Only the keys that are missing get a default, so a point that already tuned
+    // its own shades keeps them; unchecking drops the keys and the board goes back
+    // to flat black.
+    private static void ApplyRowStripes(JsonObject gl, bool on)
+    {
+        string[] keys = ["headerBg", "rowBgOdd", "rowBgEven", "gridLineColor", "gridLineWidth", "hdrColor"];
+        if (!on)
+        {
+            foreach (var k in keys) gl.Remove(k);
+            return;
+        }
+
+        var defaults = new (string Key, JsonNode Value)[]
+        {
+            ("headerBg", "#3d3d3d"),
+            ("rowBgOdd", "#5c5c5c"),
+            ("rowBgEven", "#3f3f3f"),
+            ("gridLineColor", "#2a2a2a"),
+            ("gridLineWidth", 1),
+            ("hdrColor", "#ffffff"),
+        };
+        foreach (var (key, value) in defaults)
+            if (gl[key] is null) gl[key] = value;
     }
 
     public static readonly Dictionary<string, string> KnownCurrencies = new()

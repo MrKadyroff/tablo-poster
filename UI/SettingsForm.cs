@@ -25,6 +25,22 @@ internal sealed class SettingsForm : Form
 
     // Tab: Табло
     private NumericStepper _numW = null!, _numH = null!;
+    private ComboBox _cmbRotate = null!;
+    // Режим «Аэропорт» (двустороннее табло)
+    private CheckBox _chkAirport = null!;
+    private ComboBox _cmbAirportJoin = null!, _cmbAirportRot = null!, _cmbAirportSecond = null!;
+    private Label _lblAirportSize = null!;
+    private Button _btnAirportShow = null!, _btnAirportSend = null!;
+    private bool _airportLoading;
+    // Дизайн: флаг/лого поверх, скругление, полоски, картинка/QR, прокрутка, заставка
+    private NumericStepper _numFlagRadius = null!;
+    private CheckBox _chkFlagOnTop = null!, _chkLogoOnTop = null!, _chkRowStripes = null!;
+    private CheckBox _chkImage = null!, _chkImageOnTop = null!, _chkImageSharp = null!;
+    private NumericStepper _numImgX = null!, _numImgY = null!, _numImgW = null!, _numImgH = null!;
+    private Label _lblImageFile = null!;
+    private CheckBox _chkScroll = null!, _chkSplash = null!;
+    private TextBox _txtScrollPinned = null!;
+    private NumericStepper _numScrollSpeed = null!, _numSplashPeriod = null!, _numSplashDuration = null!;
 
     // Tab: Дизайн
     private LayoutEditorControl _editor = null!;
@@ -578,8 +594,11 @@ internal sealed class SettingsForm : Form
         var rows = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, AutoSize = true };
         rows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _cmbRotate = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
+        _cmbRotate.Items.AddRange(["Без поворота", "90° по часовой", "180°", "270° (90° против часовой)"]);
         AddRow(rows, "Ширина (px):", _numW);
         AddRow(rows, "Высота (px):", _numH);
+        AddRow(rows, "Поворот картинки:", _cmbRotate);
 
         // One-click presets for the boards already in use.
         var presets = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 10, 0, 0) };
@@ -603,9 +622,144 @@ internal sealed class SettingsForm : Form
             ForeColor = UITheme.TextDim,
             Height = 36,
         };
+        var grpAirport = BuildAirportGroup();
+        tab.Controls.Add(grpAirport);
         tab.Controls.Add(grp);
         tab.Controls.Add(hint);
+        _numW.ValueChanged += (_, _) => UpdateAirportSizeLabel();
+        _numH.ValueChanged += (_, _) => UpdateAirportSizeLabel();
         return tab;
+    }
+
+    // ─── Режим «Аэропорт» — двустороннее табло ───────────────────────────────
+
+    private CardBox BuildAirportGroup()
+    {
+        var grp = new CardBox
+        {
+            Text = "Аэропорт — двустороннее табло",
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Margin = new Padding(0, 10, 0, 0),
+            Padding = new Padding(16, 38, 16, 14),
+        };
+
+        _chkAirport = new CheckBox { Text = "Включить режим «Аэропорт»", AutoSize = true, Dock = DockStyle.Top, Height = 26 };
+        _chkAirport.CheckedChanged += (_, _) => OnAirportToggled();
+
+        _cmbAirportJoin = MakeAirportCombo(DoubleSidedTools.JoinLayouts.Select(x => x.Title));
+        _cmbAirportRot = MakeAirportCombo(DoubleSidedTools.Rotations.Select(x => x.Title));
+        _cmbAirportSecond = MakeAirportCombo(DoubleSidedTools.SecondSides.Select(x => x.Title));
+        _cmbAirportJoin.SelectedIndexChanged += (_, _) => OnAirportChanged();
+        _cmbAirportRot.SelectedIndexChanged += (_, _) => OnAirportChanged();
+        _cmbAirportSecond.SelectedIndexChanged += (_, _) => OnAirportChanged();
+
+        var rows = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 2, RowCount = 0, AutoSize = true };
+        rows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+        rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        AddRow(rows, "Склейка:", _cmbAirportJoin);
+        AddRow(rows, "Поворот макета:", _cmbAirportRot);
+        AddRow(rows, "Вторая сторона:", _cmbAirportSecond);
+
+        _lblAirportSize = new Label { Dock = DockStyle.Top, Height = 26, Font = new Font("Segoe UI Semibold", 9f), TextAlign = ContentAlignment.MiddleLeft };
+
+        _btnAirportShow = MakeButton("Показать тест", Color.FromArgb(0, 102, 204), Color.White);
+        _btnAirportShow.Width = 160;
+        _btnAirportShow.Click += (_, _) =>
+        {
+            PullDisplay();
+            DoubleSidedTools.ShowTest(this, _cfg);
+        };
+        _btnAirportSend = MakeButton("Отправить тест на табло", Color.FromArgb(0, 153, 76), Color.White);
+        _btnAirportSend.Width = 210;
+        _btnAirportSend.Click += async (_, _) =>
+        {
+            PullDisplay();
+            await DoubleSidedTools.SendTestAsync(this, _cfg);
+        };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 6, 0, 0) };
+        buttons.Controls.Add(_btnAirportShow);
+        buttons.Controls.Add(_btnAirportSend);
+
+        // Dock.Top: the last added control ends up on top, so add bottom-up.
+        grp.Controls.Add(buttons);
+        grp.Controls.Add(_lblAirportSize);
+        grp.Controls.Add(rows);
+        grp.Controls.Add(_chkAirport);
+        return grp;
+    }
+
+    private static ComboBox MakeAirportCombo(IEnumerable<string> items)
+    {
+        var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 340 };
+        c.Items.AddRange(items.Cast<object>().ToArray());
+        c.SelectedIndex = 0;
+        return c;
+    }
+
+    private void OnAirportToggled()
+    {
+        if (_airportLoading) return;
+        // Холст одной стороны — портрет 192×256. Если он был «широким», ставим его.
+        if (_chkAirport.Checked && _numW.Value > _numH.Value)
+        {
+            _numW.Value = Math.Clamp(192, (int)_numW.Minimum, (int)_numW.Maximum);
+            _numH.Value = Math.Clamp(256, (int)_numH.Minimum, (int)_numH.Maximum);
+        }
+        OnAirportChanged();
+    }
+
+    private void OnAirportChanged()
+    {
+        if (_airportLoading) return;
+        PullAirport();
+        UpdateAirportSizeLabel();
+        ScheduleLivePreview();
+    }
+
+    private void PullAirport()
+    {
+        _cfg.DoubleSidedEnabled = _chkAirport.Checked;
+        _cfg.DoubleSidedJoinLayout = DoubleSidedTools.JoinLayouts[Math.Max(0, _cmbAirportJoin.SelectedIndex)].Value;
+        _cfg.DoubleSidedSideRotation = DoubleSidedTools.Rotations[Math.Max(0, _cmbAirportRot.SelectedIndex)].Value;
+        _cfg.DoubleSidedSecondSide = DoubleSidedTools.SecondSides[Math.Max(0, _cmbAirportSecond.SelectedIndex)].Value;
+    }
+
+    private void LoadAirport()
+    {
+        _airportLoading = true;
+        try
+        {
+            _chkAirport.Checked = _cfg.DoubleSidedEnabled;
+            _cmbAirportJoin.SelectedIndex = Math.Max(0, Array.FindIndex(DoubleSidedTools.JoinLayouts, x => x.Value == _cfg.DoubleSidedJoinLayout));
+            _cmbAirportRot.SelectedIndex = Math.Max(0, Array.FindIndex(DoubleSidedTools.Rotations, x => x.Value == _cfg.DoubleSidedSideRotation));
+            _cmbAirportSecond.SelectedIndex = Math.Max(0, Array.FindIndex(DoubleSidedTools.SecondSides, x => x.Value == _cfg.DoubleSidedSecondSide));
+        }
+        finally { _airportLoading = false; }
+        UpdateAirportSizeLabel();
+    }
+
+    private void UpdateAirportSizeLabel()
+    {
+        if (_lblAirportSize == null) return;
+        bool on = _chkAirport.Checked;
+        bool horizontal = _cmbAirportJoin.SelectedIndex <= 0;
+        _cmbAirportJoin.Enabled = on;
+        _cmbAirportRot.Enabled = on && horizontal;   // поворот нужен только для горизонтальной склейки
+        _cmbAirportSecond.Enabled = on;
+        _cmbRotate.Enabled = !on;   // обычный поворот при режиме «Аэропорт» игнорируется
+        _btnAirportShow.Enabled = on;
+        _btnAirportSend.Enabled = on;
+
+        var tmp = new AppConfig
+        {
+            CanvasWidth = (int)_numW.Value,
+            CanvasHeight = (int)_numH.Value,
+            DoubleSidedEnabled = on,
+            DoubleSidedJoinLayout = DoubleSidedTools.JoinLayouts[Math.Max(0, _cmbAirportJoin.SelectedIndex)].Value,
+        };
+        _lblAirportSize.Text = on ? DoubleSidedTools.JoinedSizeText(tmp) : "";
     }
 
     // ─── Tab: Дизайн ──────────────────────────────────────────────────────────
@@ -745,10 +899,21 @@ internal sealed class SettingsForm : Form
         _numFlagH = MakeNumeric(2, 4096);
         _numLogoW = MakeNumeric(2, 4096);
         _numLogoH = MakeNumeric(2, 4096);
+        _numFlagRadius = MakeNumeric(0, 64);
         AddRow(flag, "Флаг ширина:", _numFlagW);
         AddRow(flag, "Флаг высота:", _numFlagH);
+        AddRow(flag, "Скругление:", _numFlagRadius);
         AddRow(flag, "Лого ширина:", _numLogoW);
         AddRow(flag, "Лого высота:", _numLogoH);
+        _chkFlagOnTop = new CheckBox { Text = "Флаг поверх всего", AutoSize = true };
+        _chkLogoOnTop = new CheckBox { Text = "Лого поверх всего", AutoSize = true };
+        foreach (var chk in new[] { _chkFlagOnTop, _chkLogoOnTop })
+        {
+            chk.CheckedChanged += (_, _) => OnDesignNumericChanged();
+            flag.Controls.Add(chk, 0, flag.RowCount);
+            flag.SetColumnSpan(chk, 2);
+            flag.RowCount++;
+        }
         grpFlag.Controls.Add(flag);
 
         var grpRows = NumCard("Строки");
@@ -757,7 +922,84 @@ internal sealed class SettingsForm : Form
         _numRowH = MakeNumeric(2, 4096);
         AddRow(rowsG, "Старт строк Y:", _numRowsStartY);
         AddRow(rowsG, "Высота строки:", _numRowH);
+        _chkRowStripes = new CheckBox { Text = "Полоски строк (как в аэропорту)", AutoSize = true };
+        _chkRowStripes.CheckedChanged += (_, _) => OnDesignNumericChanged();
+        rowsG.Controls.Add(_chkRowStripes, 0, rowsG.RowCount);
+        rowsG.SetColumnSpan(_chkRowStripes, 2);
+        rowsG.RowCount++;
         grpRows.Controls.Add(rowsG);
+
+        // ── Картинка / QR-код — свободное размещение ──────────────────────────
+        var grpImage = NumCard("Картинка / QR-код");
+        var imgG = NumGrid(); imgG.Dock = DockStyle.Top;
+        void AddImgWide(Control c)
+        {
+            imgG.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            imgG.Controls.Add(c, 0, imgG.RowCount);
+            imgG.SetColumnSpan(c, 2);
+            imgG.RowCount++;
+        }
+        _chkImage = new CheckBox { Text = "Показывать картинку", AutoSize = true, Margin = new Padding(3, 3, 3, 6) };
+        var btnImgLoad = MakeButton("📁  Загрузить картинку / QR…", UITheme.Input, UITheme.Text);
+        btnImgLoad.Height = 34;
+        btnImgLoad.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        btnImgLoad.Margin = new Padding(3, 2, 3, 3);
+        btnImgLoad.Click += (_, _) => LoadOverlayImage();
+        _lblImageFile = new Label { AutoSize = true, ForeColor = UITheme.TextDim, Font = new Font("Segoe UI", 8.5f), Margin = new Padding(3, 2, 3, 6), Text = "файл не выбран" };
+        AddImgWide(_chkImage);
+        AddImgWide(btnImgLoad);
+        AddImgWide(_lblImageFile);
+        _numImgX = MakeNumeric(0, 4096);
+        _numImgY = MakeNumeric(0, 4096);
+        _numImgW = MakeNumeric(2, 4096);
+        _numImgH = MakeNumeric(2, 4096);
+        AddRow(imgG, "X:", _numImgX);
+        AddRow(imgG, "Y:", _numImgY);
+        AddRow(imgG, "Ширина:", _numImgW);
+        AddRow(imgG, "Высота:", _numImgH);
+        _chkImageOnTop = new CheckBox { Text = "Поверх всего (и над прокруткой)", AutoSize = true };
+        _chkImageSharp = new CheckBox { Text = "Чёткие пиксели (для QR)", AutoSize = true };
+        AddImgWide(_chkImageOnTop);
+        AddImgWide(_chkImageSharp);
+        foreach (var n in new[] { _numImgX, _numImgY, _numImgW, _numImgH })
+            n.ValueChanged += (_, _) => OnDesignNumericChanged();
+        foreach (var chk in new[] { _chkImage, _chkImageOnTop, _chkImageSharp })
+            chk.CheckedChanged += (_, _) => OnDesignNumericChanged();
+        grpImage.Controls.Add(imgG);
+
+        // ── Прокрутка остальных валют (GIF) ───────────────────────────────────
+        var grpScroll = NumCard("Прокрутка валют");
+        var scrollG = NumGrid(); scrollG.Dock = DockStyle.Top;
+        _chkScroll = new CheckBox { Text = "Прокрутка остальных валют (GIF)", AutoSize = true, Margin = new Padding(3, 3, 3, 6) };
+        _chkScroll.CheckedChanged += (_, _) => OnDesignNumericChanged();
+        scrollG.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        scrollG.Controls.Add(_chkScroll, 0, scrollG.RowCount);
+        scrollG.SetColumnSpan(_chkScroll, 2);
+        scrollG.RowCount++;
+        _txtScrollPinned = new TextBox { Width = 150 };
+        _txtScrollPinned.TextChanged += (_, _) => OnDesignNumericChanged();
+        _numScrollSpeed = new NumericStepper { Minimum = 0.5m, Maximum = 8m, Increment = 0.5m, Width = 118, Height = 32 };
+        _numScrollSpeed.ValueChanged += (_, _) => OnDesignNumericChanged();
+        AddRow(scrollG, "Закреплённые:", _txtScrollPinned);
+        AddRow(scrollG, "Скорость, px/кадр:", _numScrollSpeed);
+        grpScroll.Controls.Add(scrollG);
+
+        // ── Заставка с логотипом (GIF) ────────────────────────────────────────
+        var grpSplash = NumCard("Заставка с логотипом");
+        var splashG = NumGrid(); splashG.Dock = DockStyle.Top;
+        _chkSplash = new CheckBox { Text = "Заставка с логотипом (GIF)", AutoSize = true, Margin = new Padding(3, 3, 3, 6) };
+        _chkSplash.CheckedChanged += (_, _) => OnDesignNumericChanged();
+        splashG.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        splashG.Controls.Add(_chkSplash, 0, splashG.RowCount);
+        splashG.SetColumnSpan(_chkSplash, 2);
+        splashG.RowCount++;
+        _numSplashPeriod = MakeNumeric(3, 120);
+        _numSplashDuration = new NumericStepper { Minimum = 0.8m, Maximum = 60m, Increment = 0.2m, Width = 118, Height = 32 };
+        _numSplashPeriod.ValueChanged += (_, _) => OnDesignNumericChanged();
+        _numSplashDuration.ValueChanged += (_, _) => OnDesignNumericChanged();
+        AddRow(splashG, "Период, сек:", _numSplashPeriod);
+        AddRow(splashG, "Длительность, сек:", _numSplashDuration);
+        grpSplash.Controls.Add(splashG);
 
         // ── Размещение колонок (X) — свободная раскладка ──────────────────────
         var grpColX = NumCard("Размещение колонок (X)");
@@ -944,7 +1186,7 @@ internal sealed class SettingsForm : Form
 
         // Wire numerics → config
         foreach (var n in new[] { _numFszValue, _numFszCode, _numFszHdr, _numFszArrow,
-                                  _numFlagW, _numFlagH, _numLogoW, _numLogoH,
+                                  _numFlagW, _numFlagH, _numFlagRadius, _numLogoW, _numLogoH,
                                   _numRowsStartY, _numRowH })
         {
             n.ValueChanged += (_, _) => OnDesignNumericChanged();
@@ -967,9 +1209,13 @@ internal sealed class SettingsForm : Form
         AddSide(grpFlag);
         AddSide(grpRows);
         AddSide(grpColX);
+        AddSide(Caption("КАРТИНКА / QR"));
+        AddSide(grpImage);
         AddSide(Caption("АНИМАЦИЯ"));
         AddSide(grpTicker);
         AddSide(grpShine);
+        AddSide(grpScroll);
+        AddSide(grpSplash);
         AddSide(hint, fill: false);
 
         side.Controls.Add(col);
@@ -1019,6 +1265,24 @@ internal sealed class SettingsForm : Form
         _cfg.FszArrow = (int)_numFszArrow.Value;
         _cfg.ColFlagW = (int)_numFlagW.Value;
         _cfg.ColFlagH = (int)_numFlagH.Value;
+        _cfg.FlagRadius = (int)_numFlagRadius.Value;
+        _cfg.FlagOnTop = _chkFlagOnTop.Checked;
+        _cfg.LogoOnTop = _chkLogoOnTop.Checked;
+        _cfg.RowStripes = _chkRowStripes.Checked;
+        _cfg.ImageEnabled = _chkImage.Checked;
+        _cfg.ImageX = (int)_numImgX.Value;
+        _cfg.ImageY = (int)_numImgY.Value;
+        _cfg.ImageW = (int)_numImgW.Value;
+        _cfg.ImageH = (int)_numImgH.Value;
+        _cfg.ImageOnTop = _chkImageOnTop.Checked;
+        _cfg.ImageSharp = _chkImageSharp.Checked;
+        _cfg.ScrollEnabled = _chkScroll.Checked;
+        _cfg.ScrollPinned = _txtScrollPinned.Text;
+        _cfg.ScrollSpeed = (double)_numScrollSpeed.Value;
+        _cfg.SplashEnabled = _chkSplash.Checked;
+        _cfg.SplashPeriodSec = (int)_numSplashPeriod.Value;
+        _cfg.SplashDurationSec = (double)_numSplashDuration.Value;
+        UpdateExtraDesignUi();
         _cfg.LogoW = (int)_numLogoW.Value;
         _cfg.LogoH = (int)_numLogoH.Value;
         _cfg.RowsStartY = (int)_numRowsStartY.Value;
@@ -1111,6 +1375,25 @@ internal sealed class SettingsForm : Form
         SetNum(_numFszArrow, _cfg.FszArrow);
         SetNum(_numFlagW, _cfg.ColFlagW);
         SetNum(_numFlagH, _cfg.ColFlagH);
+        SetNum(_numFlagRadius, _cfg.FlagRadius);
+        _chkFlagOnTop.Checked = _cfg.FlagOnTop;
+        _chkLogoOnTop.Checked = _cfg.LogoOnTop;
+        _chkRowStripes.Checked = _cfg.RowStripes;
+        _chkImage.Checked = _cfg.ImageEnabled;
+        SetNum(_numImgX, _cfg.ImageX);
+        SetNum(_numImgY, _cfg.ImageY);
+        SetNum(_numImgW, _cfg.ImageW);
+        SetNum(_numImgH, _cfg.ImageH);
+        _chkImageOnTop.Checked = _cfg.ImageOnTop;
+        _chkImageSharp.Checked = _cfg.ImageSharp;
+        _lblImageFile.Text = string.IsNullOrWhiteSpace(_cfg.ImageFile) ? "файл не выбран" : Path.GetFileName(_cfg.ImageFile);
+        _chkScroll.Checked = _cfg.ScrollEnabled;
+        _txtScrollPinned.Text = _cfg.ScrollPinned;
+        _numScrollSpeed.Value = Math.Clamp((decimal)_cfg.ScrollSpeed, _numScrollSpeed.Minimum, _numScrollSpeed.Maximum);
+        _chkSplash.Checked = _cfg.SplashEnabled;
+        SetNum(_numSplashPeriod, _cfg.SplashPeriodSec);
+        _numSplashDuration.Value = Math.Clamp((decimal)_cfg.SplashDurationSec, _numSplashDuration.Minimum, _numSplashDuration.Maximum);
+        UpdateExtraDesignUi();
         SetNum(_numLogoW, _cfg.LogoW);
         SetNum(_numLogoH, _cfg.LogoH);
         SetNum(_numRowsStartY, _cfg.RowsStartY);
@@ -1127,6 +1410,61 @@ internal sealed class SettingsForm : Form
         SetNum(_numTickerFont, _cfg.TickerFontSize);
         UpdateTickerUi();
         _suppressSync = false;
+    }
+
+    private void UpdateExtraDesignUi()
+    {
+        _numImgX.Enabled = _numImgY.Enabled = _numImgW.Enabled = _numImgH.Enabled =
+            _chkImageOnTop.Enabled = _chkImageSharp.Enabled = _chkImage.Checked;
+        _txtScrollPinned.Enabled = _numScrollSpeed.Enabled = _chkScroll.Checked;
+        _numSplashPeriod.Enabled = _numSplashDuration.Enabled = _chkSplash.Checked;
+    }
+
+    /// <summary>
+    /// Копирует выбранную картинку в папку точки и включает её показ. Размер подбирается
+    /// по пропорциям файла; остальное (место, «поверх всего») правится мышью или числами.
+    /// </summary>
+    private void LoadOverlayImage()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "Картинка или QR-код для табло",
+            Filter = "Изображения|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.svg|Все файлы|*.*",
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        try
+        {
+            var ext = Path.GetExtension(dlg.FileName).ToLowerInvariant();
+            var rel = $"content/points/{_cfg.ActivePointId}/images/overlay{ext}";
+            var dest = Path.Combine(AppContext.BaseDirectory, rel.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            // Старые overlay.* с другим расширением не нужны.
+            foreach (var old in Directory.GetFiles(Path.GetDirectoryName(dest)!, "overlay.*"))
+                if (!string.Equals(old, dest, StringComparison.OrdinalIgnoreCase)) File.Delete(old);
+            File.Copy(dlg.FileName, dest, overwrite: true);
+
+            if (ext != ".svg")
+            {
+                using var fs = File.OpenRead(dest);
+                using var img = Image.FromStream(fs, false, false);
+                int w = Math.Max(2, Math.Min(img.Width, Math.Max(2, (int)_numW.Value / 3)));
+                int h = Math.Max(2, (int)Math.Round(w * (double)img.Height / img.Width));
+                _cfg.ImageW = w;
+                _cfg.ImageH = h;
+            }
+            _cfg.ImageFile = rel;
+            _cfg.ImageEnabled = true;
+            SyncDesignNumericsFromConfig();
+            _editor.Bind(_cfg);
+            MarkDirty();
+            ScheduleLivePreview();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Не удалось загрузить картинку:\n" + ex.Message, "Картинка",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private void OnShineChanged()
@@ -2541,6 +2879,8 @@ internal sealed class SettingsForm : Form
         // Display
         _numW.Value = Math.Clamp(_cfg.CanvasWidth, 8, 4096);
         _numH.Value = Math.Clamp(_cfg.CanvasHeight, 8, 4096);
+        _cmbRotate.SelectedIndex = _cfg.Rotate switch { 90 => 1, 180 => 2, 270 => 3, _ => 0 };
+        LoadAirport();
 
         // Service
         _cmbRunMode.SelectedItem = _cfg.RunMode;
@@ -2629,8 +2969,19 @@ internal sealed class SettingsForm : Form
     {
         _cfg.CanvasWidth = (int)_numW.Value;
         _cfg.CanvasHeight = (int)_numH.Value;
-        _cfg.ScreenWidth = _cfg.CanvasWidth;
-        _cfg.ScreenHeight = _cfg.CanvasHeight;
+        PullAirport();
+        if (_cfg.DoubleSidedEnabled)
+        {
+            // Режим «Аэропорт»: обычный поворот игнорируется, экран карты = размер склейки.
+            _cfg.Rotate = 0;
+            (_cfg.ScreenWidth, _cfg.ScreenHeight) = DoubleSidedTools.JoinedSize(_cfg);
+            return;
+        }
+        _cfg.Rotate = _cmbRotate.SelectedIndex switch { 1 => 90, 2 => 180, 3 => 270, _ => 0 };
+        // The card receives the rotated picture, so for 90°/270° its screen is the swapped canvas.
+        bool swap = _cfg.Rotate is 90 or 270;
+        _cfg.ScreenWidth = swap ? _cfg.CanvasHeight : _cfg.CanvasWidth;
+        _cfg.ScreenHeight = swap ? _cfg.CanvasWidth : _cfg.CanvasHeight;
     }
 
     private bool CollectForm()
