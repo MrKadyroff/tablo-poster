@@ -177,6 +177,13 @@ internal sealed class AppConfig
     public bool ImageOnTop { get; set; } = true;
     /// <summary>Crisp pixels (for QR codes) instead of smooth scaling.</summary>
     public bool ImageSharp { get; set; }
+    /// <summary>Zones mode: the board is cut into equal parts (logo / fixed rates / scrolling rates / picture) — gridLayout.zones.</summary>
+    public bool ZonesEnabled { get; set; }
+    public const int MaxZones = 6;
+    /// <summary>Zone types in order: rates | logo | scroll | image.</summary>
+    public List<string> ZoneTypes { get; set; } = ["rates", "logo", "scroll", "image"];
+    /// <summary>Per zone: comma-separated currency codes (rates: fixed ones; scroll: only these; empty = automatic).</summary>
+    public List<string> ZoneCodes { get; set; } = ["", "", "", ""];
     /// <summary>Заставка с логотипом каждые N секунд (секция splash).</summary>
     public bool SplashEnabled { get; set; }
     public int SplashPeriodSec { get; set; } = 10;
@@ -511,6 +518,21 @@ internal static class AppSettingsManager
                 cfg.TickerSpeed = gl["ticker"]?["speed"]?.GetValue<double>() ?? cfg.TickerSpeed;
                 cfg.TickerBgColor = gl["ticker"]?["bgColor"]?.GetValue<string>() ?? cfg.TickerBgColor;
                 cfg.TickerTextColor = gl["ticker"]?["textColor"]?.GetValue<string>() ?? cfg.TickerTextColor;
+                var zNode = gl["zones"]?.AsObject();
+                if (zNode != null)
+                {
+                    cfg.ZonesEnabled = zNode["enabled"]?.GetValue<bool>() ?? false;
+                    var types = new List<string>(); var codes = new List<string>();
+                    foreach (var zi in zNode["items"]?.AsArray() ?? [])
+                    {
+                        if (zi is not JsonObject zo) continue;
+                        types.Add((zo["type"]?.GetValue<string>() ?? "rates").ToLowerInvariant());
+                        codes.Add(string.Join(", ", ReadStringArray(zo["codes"])));
+                    }
+                    if (types.Count > 0) { cfg.ZoneTypes = types.Take(AppConfig.MaxZones).ToList(); cfg.ZoneCodes = codes.Take(AppConfig.MaxZones).ToList(); }
+                    var zsp = zNode["scroll"]?["speed"]?.GetValue<double>();
+                    if (zsp != null && cfg.ScrollSpeed == 3.0) cfg.ScrollSpeed = zsp.Value;
+                }
                 cfg.ShineEnabled = gl["shine"]?["enabled"]?.GetValue<bool>() ?? cfg.ShineEnabled;
                 cfg.ShineCount = gl["shine"]?["count"]?.GetValue<int>() ?? cfg.ShineCount;
                 cfg.ShineStrength = gl["shine"]?["strength"]?.GetValue<double>() ?? cfg.ShineStrength;
@@ -889,6 +911,39 @@ internal static class AppSettingsManager
             first["onTop"] = cfg.ImageOnTop;
             first["sharp"] = cfg.ImageSharp;
             gl["overlays"] = arr;
+        }
+
+        // Zones: written only when on (or already present) so other points' files stay untouched.
+        if (cfg.ZonesEnabled || gl["zones"] != null)
+        {
+            var zn = gl["zones"]?.AsObject() ?? new JsonObject();
+            zn["enabled"] = cfg.ZonesEnabled;
+            var items = new JsonArray();
+            for (int zi = 0; zi < cfg.ZoneTypes.Count && zi < AppConfig.MaxZones; zi++)
+            {
+                var it = new JsonObject { ["type"] = cfg.ZoneTypes[zi] };
+                var zcodes = (zi < cfg.ZoneCodes.Count ? cfg.ZoneCodes[zi] : "")
+                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(x => x.ToUpperInvariant()).Distinct().ToList();
+                if (zcodes.Count > 0 && cfg.ZoneTypes[zi] is "rates" or "scroll")
+                {
+                    var za = new JsonArray();
+                    foreach (var c in zcodes) za.Add(c);
+                    it["codes"] = za;
+                }
+                if (cfg.ZoneTypes[zi] == "image")
+                {
+                    if (!string.IsNullOrWhiteSpace(cfg.ImageFile)) it["file"] = cfg.ImageFile.Replace('\\', '/');
+                    it["sharp"] = cfg.ImageSharp;
+                }
+                items.Add(it);
+            }
+            zn["items"] = items;
+            var zs = zn["scroll"]?.AsObject() ?? new JsonObject();
+            zs["enabled"] = true;
+            zs["speed"] = Math.Round(Math.Clamp(cfg.ScrollSpeed, 0.5, 8), 1);
+            zn["scroll"] = zs;
+            gl["zones"] = zn;
         }
 
         if (cfg.ScrollEnabled || gl["scroll"] != null)
